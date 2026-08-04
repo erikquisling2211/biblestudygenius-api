@@ -1,0 +1,19 @@
+{
+  "name": "biblestudygenius-api",
+  "version": "1.0.0",
+  "description": "BibleStudyGenius backend — user data sync (highlights, Scripture IQ, progress, settings)",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@clerk/backend": "^1.15.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  }
+}
