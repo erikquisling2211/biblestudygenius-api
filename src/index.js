@@ -2,10 +2,12 @@ import express from "express";
 import cors from "cors";
 import { pool, initDb } from "./db.js";
 import { requireAuth } from "./auth.js";
+import { mountScripture } from "./scripture.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
+mountScripture(app);
 
 app.get("/", (_req, res) => res.json({ ok: true, service: "biblestudygenius-api" }));
 app.get("/health", (_req, res) => res.json({ ok: true }));
