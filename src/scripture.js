@@ -19,6 +19,8 @@ const KEY = process.env.API_BIBLE_KEY || "";
 // translationId -> API.Bible TEXT bibleId (licensed versions only; bundled ones never reach here)
 const TEXT_BIBLE_ID = {
   nasb: "b8ee27bcd1cae43a-01", // New American Standard Bible 1995 (Lockman)
+  nlt:  "d6e14a625393b4da-01", // New Living Translation (Tyndale)
+  nkjv: "63097d2a0a2f7db3-01", // New King James Version (Thomas Nelson)
 };
 
 // translationId -> API.Bible AUDIO bibleId
