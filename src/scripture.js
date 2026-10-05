@@ -24,6 +24,7 @@ const TEXT_BIBLE_ID = {
 // translationId -> API.Bible AUDIO bibleId
 const AUDIO_BIBLE_ID = {
   bsb: "aadc8a2f4bdb467b-01", // Berean Standard Bible — human audio
+  web: "105a06b6146d11e7-01", // World English Bible — human audio
 };
 
 // app bookId -> USFM book code used by API.Bible chapter ids (e.g. "john" -> "JHN.3")
