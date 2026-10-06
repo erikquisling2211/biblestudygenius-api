@@ -90,6 +90,30 @@ function cacheSet(key, body) {
   if (textCache.size > 2000) textCache.delete(textCache.keys().next().value); // simple bound
 }
 
+// --- Bible Brain (Faith Comes By Hearing) audio ---
+const BRAIN_KEY = process.env.BIBLE_BRAIN_KEY || "";
+const BRAIN_BASE = "https://4.dbt.io/api";
+// translationId -> Bible Brain filesets (MP3, single-narrator). OT/NT split; null = no recording.
+const BRAIN_FILESET = {
+  kjv:  { ot: "ENGKJVO1DA", nt: "ENGKJVN1DA" },
+  nlt:  { ot: "ENGNLHO1DA", nt: "ENGNLHN1DA" }, // her.BIBLE plain reading
+  nkjv: { ot: null,         nt: "ENGNKJN1DA" }, // New Testament only
+};
+const OT_CODES = new Set(["GEN","EXO","LEV","NUM","DEU","JOS","JDG","RUT","1SA","2SA","1KI","2KI","1CH","2CH","EZR","NEH","EST","JOB","PSA","PRO","ECC","SNG","ISA","JER","LAM","EZK","DAN","HOS","JOL","AMO","OBA","JON","MIC","NAM","HAB","ZEP","HAG","ZEC","MAL"]);
+async function brainAudioUrl(translationId, code, chapNum) {
+  const sets = BRAIN_FILESET[translationId];
+  if (!sets) return null;
+  const fileset = OT_CODES.has(code) ? sets.ot : sets.nt;
+  if (!fileset) return null;
+  const url = `${BRAIN_BASE}/bibles/filesets/${fileset}/${code}/${chapNum}?v=4&key=${BRAIN_KEY}`;
+  const r = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!r.ok) return null;
+  const j = await r.json();
+  const data = Array.isArray(j.data) ? j.data : [];
+  const hit = data.find((x) => x && x.path) || null;
+  return hit ? hit.path : null;
+}
+
 export function mountScripture(app) {
   // --- licensed Scripture text ---
   app.get("/scripture/:translationId/:bookId/:chapter", async (req, res) => {
@@ -133,6 +157,16 @@ export function mountScripture(app) {
   // --- chapter audio (signed URL; not cached because it expires) ---
   app.get("/audio/:translationId/:bookId/:chapter", async (req, res) => {
     try {
+      const bt = req.params.translationId;
+      if (BRAIN_FILESET[bt]) {
+        if (!BRAIN_KEY) return res.status(503).json({ error: "Bible Brain key not configured" });
+        const bcode = BOOK_CODE[req.params.bookId];
+        const bchap = parseInt(req.params.chapter, 10);
+        if (!bcode || Number.isNaN(bchap)) return res.status(404).json({ error: "Unknown book or chapter" });
+        const burl = await brainAudioUrl(bt, bcode, bchap);
+        if (!burl) return res.status(404).json({ error: "No audio for that chapter" });
+        return res.json({ resourceUrl: burl, expiresAt: null, fumsToken: null });
+      }
       if (!KEY) return res.status(503).json({ error: "API key not configured" });
       const audioId = AUDIO_BIBLE_ID[req.params.translationId];
       const code = BOOK_CODE[req.params.bookId];
