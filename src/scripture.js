@@ -95,6 +95,7 @@ const BRAIN_KEY = process.env.BIBLE_BRAIN_KEY || "";
 const BRAIN_BASE = "https://4.dbt.io/api";
 // translationId -> Bible Brain filesets (MP3, single-narrator). OT/NT split; null = no recording.
 const BRAIN_FILESET = {
+  esv:  { ot: "ENGESVO1DA", nt: "ENGESVN1DA" },
   bsb:  { ot: "ENGBERO1DA", nt: "ENGBERN1DA" }, // full Bible, plain
   web:  { ot: null,         nt: "ENGWEBN2DA" }, // NT only (dramatized)
   kjv:  { ot: "ENGKJVO1DA", nt: "ENGKJVN1DA" },
@@ -117,6 +118,7 @@ async function brainAudioUrl(translationId, code, chapNum) {
 }
 
 const BRAIN_TEXT = {
+  esv:  { ot: "ENGESVO_ET", nt: "ENGESVN_ET" },
   nasb: { ot: "ENGNASO_ET", nt: "ENGNASN_ET" }, // NASB 1995
   nlt:  { ot: "ENGNLHO_ET", nt: "ENGNLHN_ET" }, // her.BIBLE edition
   nkjv: { ot: "ENGNKJO_ET", nt: "ENGNKJN_ET" },
