@@ -95,6 +95,8 @@ const BRAIN_KEY = process.env.BIBLE_BRAIN_KEY || "";
 const BRAIN_BASE = "https://4.dbt.io/api";
 // translationId -> Bible Brain filesets (MP3, single-narrator). OT/NT split; null = no recording.
 const BRAIN_FILESET = {
+  bsb:  { ot: "ENGBERO1DA", nt: "ENGBERN1DA" }, // full Bible, plain
+  web:  { ot: null,         nt: "ENGWEBN2DA" }, // NT only (dramatized)
   kjv:  { ot: "ENGKJVO1DA", nt: "ENGKJVN1DA" },
   nlt:  { ot: "ENGNLHO1DA", nt: "ENGNLHN1DA" }, // her.BIBLE plain reading
   nkjv: { ot: null,         nt: "ENGNKJN1DA" }, // New Testament only
@@ -114,10 +116,49 @@ async function brainAudioUrl(translationId, code, chapNum) {
   return hit ? hit.path : null;
 }
 
+const BRAIN_TEXT = {
+  nasb: { ot: "ENGNASO_ET", nt: "ENGNASN_ET" }, // NASB 1995
+  nlt:  { ot: "ENGNLHO_ET", nt: "ENGNLHN_ET" }, // her.BIBLE edition
+  nkjv: { ot: "ENGNKJO_ET", nt: "ENGNKJN_ET" },
+};
+async function brainChapterText(translationId, code, chapNum) {
+  const sets = BRAIN_TEXT[translationId];
+  if (!sets) return null;
+  const fileset = OT_CODES.has(code) ? sets.ot : sets.nt;
+  if (!fileset) return null;
+  const url = `${BRAIN_BASE}/bibles/filesets/${fileset}/${code}/${chapNum}?v=4&key=${BRAIN_KEY}`;
+  const r = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!r.ok) return null;
+  const j = await r.json();
+  const rows = Array.isArray(j.data) ? j.data : [];
+  const map = new Map();
+  for (const row of rows) {
+    const v = parseInt(row.verse_start, 10);
+    const t = String(row.verse_text || "").replace(/\s+/g, " ").trim();
+    if (!Number.isNaN(v) && v > 0 && t) map.set(v, map.has(v) ? map.get(v) + " " + t : t);
+  }
+  return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([v, t]) => ({ v, t }));
+}
+
 export function mountScripture(app) {
   // --- licensed Scripture text ---
   app.get("/scripture/:translationId/:bookId/:chapter", async (req, res) => {
     try {
+      const tt = req.params.translationId;
+      if (BRAIN_TEXT[tt]) {
+        if (!BRAIN_KEY) return res.status(503).json({ error: "Bible Brain key not configured" });
+        const tcode = BOOK_CODE[req.params.bookId];
+        const tchap = parseInt(req.params.chapter, 10);
+        if (!tcode || Number.isNaN(tchap)) return res.status(404).json({ error: "Unknown book or chapter" });
+        const tkey = `brain/${tt}/${tcode}.${tchap}`;
+        const tcached = cacheGet(tkey);
+        if (tcached) return res.json(tcached);
+        const verses = await brainChapterText(tt, tcode, tchap);
+        if (!verses || !verses.length) return res.status(502).json({ error: "Empty chapter" });
+        const out = { chapter: { chapter: tchap, verses }, fumsToken: null };
+        cacheSet(tkey, out);
+        return res.json(out);
+      }
       if (!KEY) return res.status(503).json({ error: "API key not configured" });
       const bibleId = TEXT_BIBLE_ID[req.params.translationId];
       const code = BOOK_CODE[req.params.bookId];
