@@ -142,6 +142,10 @@ async function brainChapterText(translationId, code, chapNum) {
   return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([v, t]) => ({ v, t }));
 }
 
+// Bible Brain video (LUMO Project films — Gospels only, ESV narration).
+const VIDEO_FILESET = "ENGESVP2DV";
+const VIDEO_BOOKS = new Set(["MAT", "MRK", "LUK", "JHN"]);
+
 export function mountScripture(app) {
   // --- licensed Scripture text ---
   app.get("/scripture/:translationId/:bookId/:chapter", async (req, res) => {
@@ -235,6 +239,36 @@ export function mountScripture(app) {
       });
     } catch (e) {
       console.error("GET /audio", e);
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
+  // --- Gospel film (LUMO Project): returns official YouTube links; key stays server-side ---
+  app.get("/video/:bookId/:chapter", async (req, res) => {
+    try {
+      if (!BRAIN_KEY) return res.status(503).json({ error: "Bible Brain key not configured" });
+      const code = BOOK_CODE[req.params.bookId];
+      const chapNum = parseInt(req.params.chapter, 10);
+      if (!code || !VIDEO_BOOKS.has(code) || Number.isNaN(chapNum)) {
+        return res.status(404).json({ error: "No film for that book or chapter" });
+      }
+      const vkey = `video/${code}.${chapNum}`;
+      const vcached = cacheGet(vkey);
+      if (vcached) return res.json(vcached);
+      const url = `${BRAIN_BASE}/bibles/filesets/${VIDEO_FILESET}/${code}/${chapNum}?v=4&key=${BRAIN_KEY}`;
+      const r = await fetch(url, { headers: { Accept: "application/json" } });
+      if (!r.ok) return res.status(404).json({ error: "No film for that chapter" });
+      const j = await r.json();
+      const rows = Array.isArray(j.data) ? j.data : [];
+      const segments = rows
+        .map((d) => ({ youtubeUrl: d.youtube_url || null, thumbnail: d.thumbnail || null, duration: d.duration || null, verseStart: d.verse_start, verseEnd: d.verse_end }))
+        .filter((seg) => seg.youtubeUrl);
+      if (!segments.length) return res.status(404).json({ error: "No film available" });
+      const out = { segments };
+      cacheSet(vkey, out);
+      res.json(out);
+    } catch (e) {
+      console.error("GET /video", e);
       res.status(500).json({ error: "Server error" });
     }
   });
