@@ -272,4 +272,34 @@ export function mountScripture(app) {
       res.status(500).json({ error: "Server error" });
     }
   });
+
+  // --- verse timing for audio follow-along (Bible Brain timestamps) ---
+  app.get("/audiotiming/:translationId/:bookId/:chapter", async (req, res) => {
+    try {
+      if (!BRAIN_KEY) return res.json({ timings: [] });
+      const sets = BRAIN_FILESET[req.params.translationId];
+      const code = BOOK_CODE[req.params.bookId];
+      const chapNum = parseInt(req.params.chapter, 10);
+      if (!sets || !code || Number.isNaN(chapNum)) return res.json({ timings: [] });
+      const fileset = OT_CODES.has(code) ? sets.ot : sets.nt;
+      if (!fileset) return res.json({ timings: [] });
+      const tkey = `timing/${fileset}/${code}.${chapNum}`;
+      const tcached = cacheGet(tkey);
+      if (tcached) return res.json(tcached);
+      const url = `${BRAIN_BASE}/timestamps/${fileset}/${code}/${chapNum}?v=4&key=${BRAIN_KEY}`;
+      const r = await fetch(url, { headers: { Accept: "application/json" } });
+      if (!r.ok) return res.json({ timings: [] });
+      const j = await r.json();
+      const rows = Array.isArray(j.data) ? j.data : [];
+      const timings = rows
+        .map((d) => ({ v: parseInt(d.verse_start, 10), t: Number(d.timestamp) }))
+        .filter((x) => !Number.isNaN(x.v) && x.v > 0 && !Number.isNaN(x.t));
+      const out = { timings };
+      cacheSet(tkey, out);
+      res.json(out);
+    } catch (e) {
+      console.error("GET /audiotiming", e);
+      res.json({ timings: [] });
+    }
+  });
 }
