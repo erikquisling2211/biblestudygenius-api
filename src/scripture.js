@@ -6,7 +6,7 @@
  *
  * Routes (public — the reader works for guests too):
  *   GET /scripture/:translationId/:bookId/:chapter  -> { chapter: {chapter, verses:[{v,t}]}, fumsToken }
- *   GET /audio/:translationId/:bookId/:chapter       -> { resourceUrl, fumsToken }
+ *   GET /audio/:translationId/:bookId/:chapter       -> { resourceUrl, fumsToken }  (?voice=narrated|dramatized)
  *
  * Mount from index.js:
  *   import { mountScripture } from "./scripture.js";
@@ -19,11 +19,14 @@ const KEY = process.env.API_BIBLE_KEY || "";
 // translationId -> API.Bible TEXT bibleId (licensed versions only; bundled ones never reach here)
 const TEXT_BIBLE_ID = {
   nasb: "b8ee27bcd1cae43a-01", // New American Standard Bible 1995 (Lockman)
+  nlt:  "d6e14a625393b4da-01", // New Living Translation (Tyndale)
+  nkjv: "63097d2a0a2f7db3-01", // New King James Version (Thomas Nelson)
 };
 
 // translationId -> API.Bible AUDIO bibleId
 const AUDIO_BIBLE_ID = {
   bsb: "aadc8a2f4bdb467b-01", // Berean Standard Bible — human audio
+  web: "105a06b6146d11e7-01", // World English Bible — human audio
 };
 
 // app bookId -> USFM book code used by API.Bible chapter ids (e.g. "john" -> "JHN.3")
@@ -87,10 +90,102 @@ function cacheSet(key, body) {
   if (textCache.size > 2000) textCache.delete(textCache.keys().next().value); // simple bound
 }
 
+// --- Bible Brain (Faith Comes By Hearing) audio ---
+const BRAIN_KEY = process.env.BIBLE_BRAIN_KEY || "";
+const BRAIN_BASE = "https://4.dbt.io/api";
+// translationId -> default Bible Brain filesets (MP3, single-narrator). OT/NT split; null = no recording.
+const BRAIN_FILESET = {
+  esv:  { ot: "ENGESVO1DA", nt: "ENGESVN1DA" },
+  bsb:  { ot: "ENGBERO1DA", nt: "ENGBERN1DA" }, // full Bible, plain
+  web:  { ot: null,         nt: "ENGWEBN2DA" }, // NT only (dramatized)
+  kjv:  { ot: "ENGKJVO1DA", nt: "ENGKJVN1DA" },
+  nlt:  { ot: "ENGNLHO1DA", nt: "ENGNLHN1DA" }, // her.BIBLE plain reading
+  nkjv: { ot: null,         nt: "ENGNKJN1DA" }, // New Testament only
+};
+// translationId -> selectable voices. Only these three offer more than one voice.
+// "narrated" = plain single reader (same as BRAIN_FILESET); "dramatized" = multi-voice with music/SFX.
+const BRAIN_VOICES = {
+  esv: { narrated: { ot: "ENGESVO1DA", nt: "ENGESVN1DA" }, dramatized: { ot: "ENGESVO2DA", nt: "ENGESVN2DA" } },
+  kjv: { narrated: { ot: "ENGKJVO1DA", nt: "ENGKJVN1DA" }, dramatized: { ot: "ENGKJVO2DA", nt: "ENGKJVN2DA" } },
+  nlt: { narrated: { ot: "ENGNLHO1DA", nt: "ENGNLHN1DA" }, dramatized: { ot: "ENGNLTO2DA", nt: "ENGNLTN2DA" } },
+};
+const OT_CODES = new Set(["GEN","EXO","LEV","NUM","DEU","JOS","JDG","RUT","1SA","2SA","1KI","2KI","1CH","2CH","EZR","NEH","EST","JOB","PSA","PRO","ECC","SNG","ISA","JER","LAM","EZK","DAN","HOS","JOL","AMO","OBA","JON","MIC","NAM","HAB","ZEP","HAG","ZEC","MAL"]);
+
+// Pick the {ot,nt} fileset for a translation + requested voice, falling back to the default set.
+function voiceFileset(translationId, voice) {
+  const vmap = BRAIN_VOICES[translationId];
+  if (vmap && voice && vmap[voice]) return vmap[voice];
+  return BRAIN_FILESET[translationId] || null;
+}
+
+async function brainAudioUrl(translationId, code, chapNum, voice) {
+  const sets = voiceFileset(translationId, voice);
+  if (!sets) return null;
+  const fileset = OT_CODES.has(code) ? sets.ot : sets.nt;
+  if (!fileset) {
+    // requested voice has no recording for this testament — try the default voice
+    return voice ? brainAudioUrl(translationId, code, chapNum, null) : null;
+  }
+  const url = `${BRAIN_BASE}/bibles/filesets/${fileset}/${code}/${chapNum}?v=4&key=${BRAIN_KEY}`;
+  const r = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!r.ok) {
+    return voice ? brainAudioUrl(translationId, code, chapNum, null) : null;
+  }
+  const j = await r.json();
+  const data = Array.isArray(j.data) ? j.data : [];
+  const hit = data.find((x) => x && x.path) || null;
+  if (!hit && voice) return brainAudioUrl(translationId, code, chapNum, null);
+  return hit ? hit.path : null;
+}
+
+const BRAIN_TEXT = {
+  esv:  { ot: "ENGESVO_ET", nt: "ENGESVN_ET" },
+  nasb: { ot: "ENGNASO_ET", nt: "ENGNASN_ET" }, // NASB 1995
+  nlt:  { ot: "ENGNLHO_ET", nt: "ENGNLHN_ET" }, // her.BIBLE edition
+  nkjv: { ot: "ENGNKJO_ET", nt: "ENGNKJN_ET" },
+};
+async function brainChapterText(translationId, code, chapNum) {
+  const sets = BRAIN_TEXT[translationId];
+  if (!sets) return null;
+  const fileset = OT_CODES.has(code) ? sets.ot : sets.nt;
+  if (!fileset) return null;
+  const url = `${BRAIN_BASE}/bibles/filesets/${fileset}/${code}/${chapNum}?v=4&key=${BRAIN_KEY}`;
+  const r = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!r.ok) return null;
+  const j = await r.json();
+  const rows = Array.isArray(j.data) ? j.data : [];
+  const map = new Map();
+  for (const row of rows) {
+    const v = parseInt(row.verse_start, 10);
+    const t = String(row.verse_text || "").replace(/\s+/g, " ").trim();
+    if (!Number.isNaN(v) && v > 0 && t) map.set(v, map.has(v) ? map.get(v) + " " + t : t);
+  }
+  return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([v, t]) => ({ v, t }));
+}
+
+// Bible Brain video (LUMO Project films — Gospels only, ESV narration).
+const VIDEO_FILESET = "ENGESVP2DV";
+const VIDEO_BOOKS = new Set(["MAT", "MRK", "LUK", "JHN"]);
+
 export function mountScripture(app) {
   // --- licensed Scripture text ---
   app.get("/scripture/:translationId/:bookId/:chapter", async (req, res) => {
     try {
+      const tt = req.params.translationId;
+      if (BRAIN_TEXT[tt]) {
+        if (!BRAIN_KEY) return res.status(503).json({ error: "Bible Brain key not configured" });
+        const tcode = BOOK_CODE[req.params.bookId];
+        const tchap = parseInt(req.params.chapter, 10);
+        if (!tcode || Number.isNaN(tchap)) return res.status(404).json({ error: "Unknown book or chapter" });
+        const tkey = `brain/${tt}/${tcode}.${tchap}`;
+        const tcached = cacheGet(tkey);
+        if (tcached) return res.json(tcached);
+        const verses = await brainChapterText(tt, tcode, tchap);
+        if (!verses || !verses.length) return res.status(502).json({ error: "Empty chapter" });
+        const out = { chapter: { chapter: tchap, verses }, fumsToken: null };
+        cacheSet(tkey, out);
+        return res.json(out);
+      }
       if (!KEY) return res.status(503).json({ error: "API key not configured" });
       const bibleId = TEXT_BIBLE_ID[req.params.translationId];
       const code = BOOK_CODE[req.params.bookId];
@@ -130,6 +225,17 @@ export function mountScripture(app) {
   // --- chapter audio (signed URL; not cached because it expires) ---
   app.get("/audio/:translationId/:bookId/:chapter", async (req, res) => {
     try {
+      const bt = req.params.translationId;
+      const voice = req.query.voice === "dramatized" ? "dramatized" : "narrated";
+      if (BRAIN_FILESET[bt]) {
+        if (!BRAIN_KEY) return res.status(503).json({ error: "Bible Brain key not configured" });
+        const bcode = BOOK_CODE[req.params.bookId];
+        const bchap = parseInt(req.params.chapter, 10);
+        if (!bcode || Number.isNaN(bchap)) return res.status(404).json({ error: "Unknown book or chapter" });
+        const burl = await brainAudioUrl(bt, bcode, bchap, voice);
+        if (!burl) return res.status(404).json({ error: "No audio for that chapter" });
+        return res.json({ resourceUrl: burl, expiresAt: null, fumsToken: null });
+      }
       if (!KEY) return res.status(503).json({ error: "API key not configured" });
       const audioId = AUDIO_BIBLE_ID[req.params.translationId];
       const code = BOOK_CODE[req.params.bookId];
@@ -156,6 +262,67 @@ export function mountScripture(app) {
     } catch (e) {
       console.error("GET /audio", e);
       res.status(500).json({ error: "Server error" });
+    }
+  });
+
+  // --- Gospel film (LUMO Project): returns official YouTube links; key stays server-side ---
+  app.get("/video/:bookId/:chapter", async (req, res) => {
+    try {
+      if (!BRAIN_KEY) return res.status(503).json({ error: "Bible Brain key not configured" });
+      const code = BOOK_CODE[req.params.bookId];
+      const chapNum = parseInt(req.params.chapter, 10);
+      if (!code || !VIDEO_BOOKS.has(code) || Number.isNaN(chapNum)) {
+        return res.status(404).json({ error: "No film for that book or chapter" });
+      }
+      const vkey = `video/${code}.${chapNum}`;
+      const vcached = cacheGet(vkey);
+      if (vcached) return res.json(vcached);
+      const url = `${BRAIN_BASE}/bibles/filesets/${VIDEO_FILESET}/${code}/${chapNum}?v=4&key=${BRAIN_KEY}`;
+      const r = await fetch(url, { headers: { Accept: "application/json" } });
+      if (!r.ok) return res.status(404).json({ error: "No film for that chapter" });
+      const j = await r.json();
+      const rows = Array.isArray(j.data) ? j.data : [];
+      const segments = rows
+        .map((d) => ({ youtubeUrl: d.youtube_url || null, thumbnail: d.thumbnail || null, duration: d.duration || null, verseStart: d.verse_start, verseEnd: d.verse_end }))
+        .filter((seg) => seg.youtubeUrl);
+      if (!segments.length) return res.status(404).json({ error: "No film available" });
+      const out = { segments };
+      cacheSet(vkey, out);
+      res.json(out);
+    } catch (e) {
+      console.error("GET /video", e);
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
+  // --- verse timing for audio follow-along (Bible Brain timestamps) ---
+  app.get("/audiotiming/:translationId/:bookId/:chapter", async (req, res) => {
+    try {
+      if (!BRAIN_KEY) return res.json({ timings: [] });
+      const voice = req.query.voice === "dramatized" ? "dramatized" : "narrated";
+      const sets = voiceFileset(req.params.translationId, voice);
+      const code = BOOK_CODE[req.params.bookId];
+      const chapNum = parseInt(req.params.chapter, 10);
+      if (!sets || !code || Number.isNaN(chapNum)) return res.json({ timings: [] });
+      const fileset = OT_CODES.has(code) ? sets.ot : sets.nt;
+      if (!fileset) return res.json({ timings: [] });
+      const tkey = `timing/${fileset}/${code}.${chapNum}`;
+      const tcached = cacheGet(tkey);
+      if (tcached) return res.json(tcached);
+      const url = `${BRAIN_BASE}/timestamps/${fileset}/${code}/${chapNum}?v=4&key=${BRAIN_KEY}`;
+      const r = await fetch(url, { headers: { Accept: "application/json" } });
+      if (!r.ok) return res.json({ timings: [] });
+      const j = await r.json();
+      const rows = Array.isArray(j.data) ? j.data : [];
+      const timings = rows
+        .map((d) => ({ v: parseInt(d.verse_start, 10), t: Number(d.timestamp) }))
+        .filter((x) => !Number.isNaN(x.v) && x.v > 0 && !Number.isNaN(x.t));
+      const out = { timings };
+      cacheSet(tkey, out);
+      res.json(out);
+    } catch (e) {
+      console.error("GET /audiotiming", e);
+      res.json({ timings: [] });
     }
   });
 }
