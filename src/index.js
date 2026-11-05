@@ -1,15 +1,18 @@
 import express from "express";
+import { mountNews } from "./news.js";
 import cors from "cors";
 import { pool, initDb } from "./db.js";
 import { requireAuth } from "./auth.js";
 import { mountScripture } from "./scripture.js";
 import { mountWordStudy } from "./wordstudy.js";
+import { mountVerseImage } from "./verseimage.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 mountScripture(app);
   mountWordStudy(app);
+mountVerseImage(app);
 
 app.get("/", (_req, res) => res.json({ ok: true, service: "biblestudygenius-api" }));
 app.get("/health", (_req, res) => res.json({ ok: true }));
@@ -141,6 +144,7 @@ const PRIVACY_HTML = `<!doctype html>
 </html>`;
 app.get("/terms", (_req, res) => res.type("html").send(TERMS_HTML));
 app.get("/privacy", (_req, res) => res.type("html").send(PRIVACY_HTML));
+mountNews(app);
 
 async function getOrCreateState(userId) {
   const { rows } = await pool.query("SELECT * FROM user_state WHERE user_id = $1", [userId]);

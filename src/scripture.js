@@ -167,6 +167,29 @@ async function brainChapterText(translationId, code, chapNum) {
 const VIDEO_FILESET = "ENGESVP2DV";
 const VIDEO_BOOKS = new Set(["MAT", "MRK", "LUK", "JHN"]);
 
+// --- Offline audio downloads (FCBH license) ---
+// THE allowlist: only these narrated DA filesets are cleared for download.
+// format=opus appends "-opus16" (Opus in WebM); format=mp3 uses the base fileset.
+// Anything else (NLT, NKJV, WEB, dramatized, other codes) is stream-only -> 400.
+// Shared by the iOS and Android watch apps and the phone app.
+const DOWNLOAD_ALLOWLIST = {
+  esv: { ot: "ENGESVO1DA", nt: "ENGESVN1DA" },
+  kjv: { ot: "ENGKJVO1DA", nt: "ENGKJVN1DA" },
+  bsb: { ot: "ENGBERO1DA", nt: "ENGBERN1DA" },
+};
+const DOWNLOAD_FORMATS = { opus: "-opus16", mp3: "" };
+const USFM_BOOKS = new Set(Object.values(BOOK_CODE));
+const DEFAULT_URL_TTL = 24 * 60 * 60;
+
+// Seconds until a signed CloudFront URL expires (reads its Expires= param).
+function urlExpiresIn(signedUrl) {
+  try {
+    const exp = Number(new URL(signedUrl).searchParams.get("Expires"));
+    if (Number.isFinite(exp) && exp > 0) return Math.max(0, Math.floor(exp - Date.now() / 1000));
+  } catch {}
+  return DEFAULT_URL_TTL;
+}
+
 export function mountScripture(app) {
   // --- licensed Scripture text ---
   app.get("/scripture/:translationId/:bookId/:chapter", async (req, res) => {
@@ -291,6 +314,42 @@ export function mountScripture(app) {
       res.json(out);
     } catch (e) {
       console.error("GET /video", e);
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
+  // --- offline audio download URL (shared contract for all clients) ---
+  // GET /download/audio?translation=esv|kjv|bsb&book=USFM&chapter=n&format=opus|mp3
+  //   -> { url, expires_in }   (client downloads the bytes immediately and stores the FILE)
+  app.get("/download/audio", async (req, res) => {
+    try {
+      const translation = String(req.query.translation || "").toLowerCase();
+      const book = String(req.query.book || "").toUpperCase();
+      const chapterStr = String(req.query.chapter || "");
+      const format = String(req.query.format || "").toLowerCase();
+      const sets = DOWNLOAD_ALLOWLIST[translation];
+      const suffix = DOWNLOAD_FORMATS[format];
+      const chapter = /^\d{1,3}$/.test(chapterStr) ? parseInt(chapterStr, 10) : NaN;
+      if (!sets) return res.status(400).json({ error: "translation must be esv, kjv or bsb" });
+      if (suffix === undefined) return res.status(400).json({ error: "format must be opus or mp3" });
+      if (!USFM_BOOKS.has(book)) return res.status(400).json({ error: "book must be a 3-letter USFM code (GEN..REV)" });
+      if (!(chapter >= 1 && chapter <= 150)) return res.status(400).json({ error: "chapter must be a positive integer" });
+      if (!BRAIN_KEY) return res.status(503).json({ error: "Bible Brain key not configured" });
+
+      const fileset = (OT_CODES.has(book) ? sets.ot : sets.nt) + suffix;
+      const r = await fetch(`${BRAIN_BASE}/bibles/filesets/${fileset}/${book}/${chapter}?v=4&key=${BRAIN_KEY}`,
+        { headers: { Accept: "application/json" } });
+      if (!r.ok) {
+        console.error("download/audio upstream", fileset, book, chapter, r.status);
+        return res.status(r.status === 404 ? 404 : 502).json({ error: "No downloadable audio for that chapter" });
+      }
+      const j = await r.json();
+      const hit = (Array.isArray(j.data) ? j.data : []).find((x) => x && typeof x.path === "string");
+      if (!hit) return res.status(404).json({ error: "No downloadable audio for that chapter" });
+      res.set("Cache-Control", "no-store");
+      res.json({ url: hit.path, expires_in: urlExpiresIn(hit.path) });
+    } catch (e) {
+      console.error("GET /download/audio", e);
       res.status(500).json({ error: "Server error" });
     }
   });
