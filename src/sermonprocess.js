@@ -15,6 +15,7 @@ import { createReadStream, promises as fs } from "fs";
 import os from "os";
 import path from "path";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
+import { uploadFileToR2, r2Configured } from "./r2.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -51,6 +52,15 @@ function toWhisperAudio(input, output) {
     const p = spawn(ffmpegPath, ["-y", "-i", input, "-ac", "1", "-ar", "16000", "-b:a", "32k", output]);
     p.on("error", reject);
     p.on("close", (c) => (c === 0 ? resolve() : reject(new Error("ffmpeg exit " + c))));
+  });
+}
+
+// Extract [startSec, endSec] of an audio file to a compact speech-quality mp3 (for hosting/download).
+function sliceAudio(input, output, startSec, endSec) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(ffmpegPath, ["-y", "-ss", String(startSec), "-to", String(endSec), "-i", input, "-vn", "-ac", "1", "-b:a", "96k", output]);
+    p.on("error", reject);
+    p.on("close", (c) => (c === 0 ? resolve() : reject(new Error("ffmpeg slice exit " + c))));
   });
 }
 
@@ -235,6 +245,19 @@ export async function processYouTube(urlOrId) {
     const span = await findSermonSpan(segs);
     const sermonText = sliceTranscript(segs, span.startSec, span.endSec) || tr.text;
     const plan = await studyPlan(sermonText);
+    // Host the sermon-only audio on R2 so YouTube-only churches get downloadable/offline audio.
+    let audioUrl = null;
+    if (r2Configured()) {
+      const clip = path.join(os.tmpdir(), `yt_${stamp}_sermon.mp3`);
+      try {
+        await sliceAudio(raw, clip, span.startSec, span.endSec);
+        audioUrl = await uploadFileToR2(clip, `sermons/${vid}.mp3`, "audio/mpeg");
+      } catch (e) {
+        console.error("R2 sermon audio", e);
+      } finally {
+        fs.unlink(clip).catch(() => {});
+      }
+    }
     return {
       source: "youtube",
       videoId: vid,
@@ -242,6 +265,7 @@ export async function processYouTube(urlOrId) {
       sermonStartSec: span.startSec,
       sermonEndSec: span.endSec,
       embedUrl: `https://www.youtube.com/embed/${vid}?start=${span.startSec}&end=${span.endSec}`,
+      audioUrl,
       ...plan,
     };
   } finally {

@@ -11,8 +11,7 @@
  *   GET  /church/:id                   church detail + latest sermon (app)
  */
 import { pool } from "./db.js";
-import { processPodcastFeed, processYouTube, latestEpisode } from "./sermonprocess.js";
-import cron from "node-cron";
+import { processPodcastFeed, processYouTube } from "./sermonprocess.js";
 
 async function initChurches() {
   await pool.query(`
@@ -45,72 +44,12 @@ async function initChurches() {
   await pool.query(`ALTER TABLE sermons ADD COLUMN IF NOT EXISTS video_id TEXT;`);
   await pool.query(`ALTER TABLE sermons ADD COLUMN IF NOT EXISTS sermon_start_sec INTEGER;`);
   await pool.query(`ALTER TABLE sermons ADD COLUMN IF NOT EXISTS sermon_end_sec INTEGER;`);
-  // searchable nicknames/abbreviations, e.g. "ACC", "BUMC"
-  await pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS aliases TEXT;`);
   console.log("✅ Churches tables ready");
 }
 
 function admin(req) {
   const t = process.env.ADMIN_TOKEN;
   return !!t && (req.query.token === t || req.headers["x-admin-token"] === t);
-}
-
-// Insert a sermon, de-duplicating: a sermon with the same church + date (podcast) or
-// church + videoId (youtube) REPLACES the old row instead of adding a duplicate.
-// A manually-set video embed is preserved across a re-process that doesn't supply one.
-async function saveSermon(churchId, r, opts = {}) {
-  const date = r.date || null;
-  let videoId = opts.videoId || null;
-  let startSec = Number.isFinite(opts.startSec) ? opts.startSec : null;
-  let endSec = Number.isFinite(opts.endSec) ? opts.endSec : null;
-  const audio = opts.audioUrl !== undefined ? opts.audioUrl : (r.audioUrl || null);
-
-  const keyCol = date ? "sermon_date" : (videoId ? "video_id" : null);
-  const keyVal = date || videoId;
-  if (keyCol) {
-    const e = await pool.query(
-      `SELECT video_id, sermon_start_sec, sermon_end_sec FROM sermons
-         WHERE church_id = $1 AND ${keyCol} = $2 ORDER BY processed_at DESC LIMIT 1`,
-      [churchId, keyVal]
-    );
-    const prev = e.rows[0];
-    if (prev) {
-      if (!videoId && prev.video_id) videoId = prev.video_id;
-      if (startSec == null && prev.sermon_start_sec != null) startSec = prev.sermon_start_sec;
-      if (endSec == null && prev.sermon_end_sec != null) endSec = prev.sermon_end_sec;
-      await pool.query(`DELETE FROM sermons WHERE church_id = $1 AND ${keyCol} = $2`, [churchId, keyVal]);
-    }
-  }
-
-  const s = await pool.query(
-    `INSERT INTO sermons (church_id,title,preacher,sermon_date,audio_url,summary,scriptures,plan,questions,video_id,sermon_start_sec,sermon_end_sec,processed_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
-    [churchId, r.title || null, null, date, audio, r.summary || null,
-     JSON.stringify(r.scriptures || []), JSON.stringify(r.plan || []), JSON.stringify(r.questions || []),
-     videoId, startSec, endSec, Date.now()]
-  );
-  return s.rows[0].id;
-}
-
-// Process every active church that has a podcast feed (audio + study plan). Used by the weekly cron.
-async function processAllChurches() {
-  const { rows } = await pool.query(`SELECT id, name, feed_url FROM churches WHERE active AND feed_url IS NOT NULL ORDER BY id`);
-  console.log(`⏰ Weekly run: ${rows.length} church(es)`);
-  const out = [];
-  for (const ch of rows) {
-    try {
-      const result = await processPodcastFeed(ch.feed_url);
-      if (result.error) { out.push({ church: ch.id, name: ch.name, error: result.error }); continue; }
-      const sermonId = await saveSermon(ch.id, result, {});
-      out.push({ church: ch.id, name: ch.name, sermonId, title: result.title });
-      console.log(`✅ ${ch.name} -> sermon ${sermonId}: ${result.title}`);
-    } catch (e) {
-      out.push({ church: ch.id, name: ch.name, error: String((e && e.message) || e) });
-      console.error(`cron ${ch.name} failed:`, (e && e.message) || e);
-    }
-  }
-  console.log("⏰ Weekly run complete");
-  return out;
 }
 
 async function latestSermon(churchId) {
@@ -126,22 +65,16 @@ async function latestSermon(churchId) {
 export function mountChurches(app) {
   initChurches().catch((e) => console.error("initChurches", e));
 
-  // Weekly auto-processing: Mondays at 6:00 AM Central (after Sunday services are posted).
-  if (cron.validate("0 6 * * 1")) {
-    cron.schedule("0 6 * * 1", () => { processAllChurches().catch((e) => console.error("weekly cron", e)); }, { timezone: "America/Chicago" });
-    console.log("⏰ Weekly sermon cron scheduled (Mon 6:00 AM CT)");
-  }
-
   app.post("/admin/church", async (req, res) => {
     if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
     const b = req.body || {};
     if (!b.name) return res.status(400).json({ error: "name required" });
     try {
       const r = await pool.query(
-        `INSERT INTO churches (name,city,state,zip,lat,lon,denomination,website,feed_url,youtube_url,aliases,active,created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,$12) RETURNING *`,
+        `INSERT INTO churches (name,city,state,zip,lat,lon,denomination,website,feed_url,youtube_url,active,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,$11) RETURNING *`,
         [b.name, b.city || null, b.state || null, b.zip || null, b.lat ?? null, b.lon ?? null,
-         b.denomination || null, b.website || null, b.feed_url || null, b.youtube_url || null, b.aliases || null, Date.now()]
+         b.denomination || null, b.website || null, b.feed_url || null, b.youtube_url || null, Date.now()]
       );
       res.json(r.rows[0]);
     } catch (e) {
@@ -160,15 +93,13 @@ export function mountChurches(app) {
       if (!church.feed_url) return res.status(400).json({ error: "church has no feed_url" });
       const result = await processPodcastFeed(church.feed_url);
       if (result.error) return res.status(502).json(result);
-      // Optional video embed (Tier-1: church's own YouTube video, no server download).
-      // videoId from ?videoId= or the church's youtube_url; optional ?startSec=&endSec= bound the player.
-      const vidRaw = String(req.query.videoId || church.youtube_url || "");
-      const vm = vidRaw.match(/(?:v=|youtu\.be\/|\/embed\/|\/live\/|\/shorts\/)([A-Za-z0-9_-]{11})/);
-      const videoId = vm ? vm[1] : (/^[A-Za-z0-9_-]{11}$/.test(vidRaw) ? vidRaw : null);
-      const startSec = parseInt(req.query.startSec, 10);
-      const endSec = parseInt(req.query.endSec, 10);
-      const sermonId = await saveSermon(id, result, { videoId, startSec, endSec });
-      res.json({ churchId: id, sermonId, ...result });
+      const s = await pool.query(
+        `INSERT INTO sermons (church_id,title,preacher,sermon_date,audio_url,summary,scriptures,plan,questions,processed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+        [id, result.title || null, null, result.date || null, result.audioUrl || null, result.summary || null,
+         JSON.stringify(result.scriptures || []), JSON.stringify(result.plan || []), JSON.stringify(result.questions || []), Date.now()]
+      );
+      res.json({ churchId: id, sermonId: s.rows[0].id, ...result });
     } catch (e) {
       console.error("POST /admin/church/:id/process", e);
       res.status(500).json({ error: String((e && e.message) || e) });
@@ -181,98 +112,20 @@ export function mountChurches(app) {
     const url = String(req.query.url || (req.body && req.body.url) || "");
     if (!url) return res.status(400).json({ error: "missing url param" });
     try {
-      const c = await pool.query(`SELECT id, feed_url FROM churches WHERE id = $1`, [id]);
+      const c = await pool.query(`SELECT id FROM churches WHERE id = $1`, [id]);
       if (!c.rows[0]) return res.status(404).json({ error: "church not found" });
       const result = await processYouTube(url);
       if (result.error) return res.status(502).json(result);
-      // If the church also has a podcast feed, attach its latest downloadable MP3 for offline play.
-      let audioUrl = null;
-      if (c.rows[0].feed_url) {
-        try { const ep = await latestEpisode(c.rows[0].feed_url); audioUrl = ep.audio || null; } catch (e) { console.error("feed audio attach", e); }
-      }
-      const sermonId = await saveSermon(id, result, {
-        videoId: result.videoId || null,
-        startSec: result.sermonStartSec,
-        endSec: result.sermonEndSec,
-        audioUrl,
-      });
-      res.json({ churchId: id, sermonId, ...result });
+      const s = await pool.query(
+        `INSERT INTO sermons (church_id,title,preacher,sermon_date,audio_url,summary,scriptures,plan,questions,video_id,sermon_start_sec,sermon_end_sec,processed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+        [id, result.title || null, null, null, null, result.summary || null,
+         JSON.stringify(result.scriptures || []), JSON.stringify(result.plan || []), JSON.stringify(result.questions || []),
+         result.videoId || null, result.sermonStartSec ?? null, result.sermonEndSec ?? null, Date.now()]
+      );
+      res.json({ churchId: id, sermonId: s.rows[0].id, ...result });
     } catch (e) {
       console.error("POST /admin/church/:id/youtube", e);
-      res.status(500).json({ error: String((e && e.message) || e) });
-    }
-  });
-
-  // Set a sermon's video embed bounds (and/or videoId) without re-running transcription.
-  app.post("/admin/sermon/:id/video", async (req, res) => {
-    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
-    const id = parseInt(req.params.id, 10);
-    const b = { ...req.query, ...(req.body || {}) };
-    const sets = []; const vals = []; let i = 1;
-    if (b.videoId != null) { sets.push(`video_id = $${i++}`); vals.push(b.videoId); }
-    if (b.startSec != null) { sets.push(`sermon_start_sec = $${i++}`); vals.push(parseInt(b.startSec, 10)); }
-    if (b.endSec != null) { sets.push(`sermon_end_sec = $${i++}`); vals.push(parseInt(b.endSec, 10)); }
-    if (!sets.length) return res.status(400).json({ error: "no video fields to update" });
-    vals.push(id);
-    try {
-      const r = await pool.query(
-        `UPDATE sermons SET ${sets.join(", ")} WHERE id = $${i}
-         RETURNING id, video_id AS "videoId", sermon_start_sec AS "sermonStartSec", sermon_end_sec AS "sermonEndSec"`,
-        vals
-      );
-      if (!r.rows[0]) return res.status(404).json({ error: "not found" });
-      res.json(r.rows[0]);
-    } catch (e) {
-      console.error("POST /admin/sermon/:id/video", e);
-      res.status(500).json({ error: String((e && e.message) || e) });
-    }
-  });
-
-  app.post("/admin/church/:id/update", async (req, res) => {
-    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
-    const id = parseInt(req.params.id, 10);
-    const b = { ...req.query, ...(req.body || {}) };
-    const allowed = ["name", "city", "state", "zip", "denomination", "website", "feed_url", "youtube_url", "aliases"];
-    const sets = []; const vals = []; let i = 1;
-    for (const k of allowed) {
-      if (b[k] != null) { sets.push(`${k} = $${i++}`); vals.push(b[k]); }
-    }
-    if (!sets.length) return res.status(400).json({ error: "no fields to update" });
-    vals.push(id);
-    try {
-      const r = await pool.query(`UPDATE churches SET ${sets.join(", ")} WHERE id = $${i} RETURNING *`, vals);
-      if (!r.rows[0]) return res.status(404).json({ error: "not found" });
-      res.json(r.rows[0]);
-    } catch (e) {
-      console.error("POST /admin/church/:id/update", e);
-      res.status(500).json({ error: String((e && e.message) || e) });
-    }
-  });
-
-  // Manually trigger the weekly run now (for testing). Processes all active churches with a feed.
-  app.post("/admin/cron/run", async (req, res) => {
-    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
-    try {
-      const results = await processAllChurches();
-      res.json({ ok: true, results });
-    } catch (e) {
-      console.error("POST /admin/cron/run", e);
-      res.status(500).json({ error: String((e && e.message) || e) });
-    }
-  });
-
-  // One-time: remove today's reprocessing duplicates, keeping only the newest sermon per church.
-  // Do NOT run this once you have a real multi-sermon archive.
-  app.post("/admin/cleanup-dupes", async (req, res) => {
-    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
-    try {
-      const r = await pool.query(`
-        DELETE FROM sermons s
-        WHERE EXISTS (SELECT 1 FROM sermons s2 WHERE s2.church_id = s.church_id AND s2.processed_at > s.processed_at)
-      `);
-      res.json({ ok: true, deleted: r.rowCount });
-    } catch (e) {
-      console.error("POST /admin/cleanup-dupes", e);
       res.status(500).json({ error: String((e && e.message) || e) });
     }
   });
@@ -283,7 +136,7 @@ export function mountChurches(app) {
     try {
       const r = await pool.query(
         `SELECT id,name,city,state,zip,denomination,website FROM churches
-          WHERE active AND (name ILIKE $1 OR aliases ILIKE $1 OR zip = $2) ORDER BY name LIMIT 25`,
+          WHERE active AND (name ILIKE $1 OR zip = $2) ORDER BY name LIMIT 25`,
         [`%${q}%`, q]
       );
       res.json({ churches: r.rows });
