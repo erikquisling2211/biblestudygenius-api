@@ -6,6 +6,9 @@ import { requireAuth } from "./auth.js";
 import { mountScripture } from "./scripture.js";
 import { mountWordStudy } from "./wordstudy.js";
 import { mountVerseImage } from "./verseimage.js";
+import { mountLocalSermons } from "./localsermons.js";
+import { mountSermonProcess } from "./sermonprocess.js";
+import { mountChurches } from "./churches.js";
 
 const app = express();
 app.use(cors());
@@ -13,6 +16,9 @@ app.use(express.json({ limit: "2mb" }));
 mountScripture(app);
   mountWordStudy(app);
 mountVerseImage(app);
+mountLocalSermons(app);
+mountSermonProcess(app);
+mountChurches(app);
 
 app.get("/", (_req, res) => res.json({ ok: true, service: "biblestudygenius-api" }));
 app.get("/health", (_req, res) => res.json({ ok: true }));
