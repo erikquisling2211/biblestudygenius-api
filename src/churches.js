@@ -44,6 +44,8 @@ async function initChurches() {
   await pool.query(`ALTER TABLE sermons ADD COLUMN IF NOT EXISTS video_id TEXT;`);
   await pool.query(`ALTER TABLE sermons ADD COLUMN IF NOT EXISTS sermon_start_sec INTEGER;`);
   await pool.query(`ALTER TABLE sermons ADD COLUMN IF NOT EXISTS sermon_end_sec INTEGER;`);
+  // searchable nicknames/abbreviations, e.g. "ACC", "BUMC"
+  await pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS aliases TEXT;`);
   console.log("✅ Churches tables ready");
 }
 
@@ -71,10 +73,10 @@ export function mountChurches(app) {
     if (!b.name) return res.status(400).json({ error: "name required" });
     try {
       const r = await pool.query(
-        `INSERT INTO churches (name,city,state,zip,lat,lon,denomination,website,feed_url,youtube_url,active,created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,$11) RETURNING *`,
+        `INSERT INTO churches (name,city,state,zip,lat,lon,denomination,website,feed_url,youtube_url,aliases,active,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,$12) RETURNING *`,
         [b.name, b.city || null, b.state || null, b.zip || null, b.lat ?? null, b.lon ?? null,
-         b.denomination || null, b.website || null, b.feed_url || null, b.youtube_url || null, Date.now()]
+         b.denomination || null, b.website || null, b.feed_url || null, b.youtube_url || null, b.aliases || null, Date.now()]
       );
       res.json(r.rows[0]);
     } catch (e) {
@@ -143,13 +145,34 @@ export function mountChurches(app) {
     }
   });
 
+  app.post("/admin/church/:id/update", async (req, res) => {
+    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
+    const id = parseInt(req.params.id, 10);
+    const b = { ...req.query, ...(req.body || {}) };
+    const allowed = ["name", "city", "state", "zip", "denomination", "website", "feed_url", "youtube_url", "aliases"];
+    const sets = []; const vals = []; let i = 1;
+    for (const k of allowed) {
+      if (b[k] != null) { sets.push(`${k} = $${i++}`); vals.push(b[k]); }
+    }
+    if (!sets.length) return res.status(400).json({ error: "no fields to update" });
+    vals.push(id);
+    try {
+      const r = await pool.query(`UPDATE churches SET ${sets.join(", ")} WHERE id = $${i} RETURNING *`, vals);
+      if (!r.rows[0]) return res.status(404).json({ error: "not found" });
+      res.json(r.rows[0]);
+    } catch (e) {
+      console.error("POST /admin/church/:id/update", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
   app.get("/churches/search", async (req, res) => {
     const q = String(req.query.q || "").trim();
     if (!q) return res.json({ churches: [] });
     try {
       const r = await pool.query(
         `SELECT id,name,city,state,zip,denomination,website FROM churches
-          WHERE active AND (name ILIKE $1 OR zip = $2) ORDER BY name LIMIT 25`,
+          WHERE active AND (name ILIKE $1 OR aliases ILIKE $1 OR zip = $2) ORDER BY name LIMIT 25`,
         [`%${q}%`, q]
       );
       res.json({ churches: r.rows });
