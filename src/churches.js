@@ -145,6 +145,31 @@ export function mountChurches(app) {
     }
   });
 
+  // Set a sermon's video embed bounds (and/or videoId) without re-running transcription.
+  app.post("/admin/sermon/:id/video", async (req, res) => {
+    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
+    const id = parseInt(req.params.id, 10);
+    const b = { ...req.query, ...(req.body || {}) };
+    const sets = []; const vals = []; let i = 1;
+    if (b.videoId != null) { sets.push(`video_id = $${i++}`); vals.push(b.videoId); }
+    if (b.startSec != null) { sets.push(`sermon_start_sec = $${i++}`); vals.push(parseInt(b.startSec, 10)); }
+    if (b.endSec != null) { sets.push(`sermon_end_sec = $${i++}`); vals.push(parseInt(b.endSec, 10)); }
+    if (!sets.length) return res.status(400).json({ error: "no video fields to update" });
+    vals.push(id);
+    try {
+      const r = await pool.query(
+        `UPDATE sermons SET ${sets.join(", ")} WHERE id = $${i}
+         RETURNING id, video_id AS "videoId", sermon_start_sec AS "sermonStartSec", sermon_end_sec AS "sermonEndSec"`,
+        vals
+      );
+      if (!r.rows[0]) return res.status(404).json({ error: "not found" });
+      res.json(r.rows[0]);
+    } catch (e) {
+      console.error("POST /admin/sermon/:id/video", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
   app.post("/admin/church/:id/update", async (req, res) => {
     if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
     const id = parseInt(req.params.id, 10);
