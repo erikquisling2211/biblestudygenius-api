@@ -123,7 +123,7 @@ export async function latestEpisode(feedUrl, index = 0) {
   return {
     title: clean(pick(/<title>([\s\S]*?)<\/title>/)),
     date: clean(pick(/<pubDate>([\s\S]*?)<\/pubDate>/)),
-    audio: pick(/<enclosure[^>]*url="([^"]+)"/),
+    audio: decodeEntities(pick(/<enclosure[^>]*url="([^"]+)"/)),
   };
 }
 
