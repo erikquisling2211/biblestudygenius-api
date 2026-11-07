@@ -150,13 +150,23 @@ export async function processPodcastFeed(feed, index = 0) {
 // that block our server IP. python3 is already installed (for yt-dlp).
 const PY_DL = `
 import sys, urllib.request as u
+from urllib.parse import urlsplit
 url, dest = sys.argv[1], sys.argv[2]
 proxy = sys.argv[3] if len(sys.argv) > 3 else ""
-UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+# Podcast-app UA: hosts like Buzzsprout serve media to podcast apps but block browser/bot UAs.
+UA = "AppleCoreMedia/1.0.0 (iPhone; CPU OS 17_0 like Mac OS X)"
+_sp = urlsplit(url)
+REFERER = _sp.scheme + "://" + _sp.netloc + "/"
 def dl(opener):
-    req = u.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
+    req = u.Request(url, headers={"User-Agent": UA, "Accept": "*/*", "Referer": REFERER})
     with opener.open(req, timeout=180) as r:
-        return r.read()
+        ct = (r.headers.get("Content-Type") or "").lower()
+        data = r.read()
+    # Some hosts serve a 200-OK HTML anti-bot page to datacenter IPs; treat that as a failure
+    # so the caller retries through the residential proxy.
+    if ("html" in ct) or data[:1] == b"<" or len(data) < 2048:
+        raise Exception("non-audio response (ct=%s len=%d)" % (ct, len(data)))
+    return data
 data = None
 try:
     data = dl(u.build_opener())
