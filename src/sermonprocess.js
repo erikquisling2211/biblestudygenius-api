@@ -112,11 +112,12 @@ function decodeEntities(s) {
 export // Some podcast CDNs (e.g. Captivate) 404 unknown bot User-Agents, so present a browser UA.
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
-export async function latestEpisode(feedUrl) {
+export async function latestEpisode(feedUrl, index = 0) {
   const res = await fetchViaProxyIfBlocked(feedUrl, { headers: { "User-Agent": BROWSER_UA } });
   if (!res.ok) throw new Error("feed " + res.status);
   const xml = await res.text();
-  const item = xml.split(/<item[\s>]/)[1] || "";
+  // split() yields [preamble, item0, item1, ...]; index 0 = newest episode.
+  const item = xml.split(/<item[\s>]/)[index + 1] || "";
   const pick = (re) => (item.match(re) || [])[1];
   const clean = (s) => decodeEntities((s || "").replace(/<!\[CDATA\[|\]\]>/g, "").trim());
   return {
@@ -126,13 +127,13 @@ export async function latestEpisode(feedUrl) {
   };
 }
 
-// Reusable: fetch a feed's latest episode and return the full study-plan object.
-export async function processPodcastFeed(feed) {
+// Reusable: fetch a feed's episode (index 0 = newest) and return the full study-plan object.
+export async function processPodcastFeed(feed, index = 0) {
   const stamp = Date.now();
   const raw = path.join(os.tmpdir(), `sermon_${stamp}.mp3`);
   const small = path.join(os.tmpdir(), `sermon_${stamp}.m4a`);
   try {
-    const ep = await latestEpisode(feed);
+    const ep = await latestEpisode(feed, index);
     if (!ep.audio) return { error: "no audio enclosure in feed", episode: ep };
     await downloadTo(ep.audio, raw);
     await toWhisperAudio(raw, small);
