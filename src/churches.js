@@ -23,6 +23,8 @@ import Stripe from "stripe";
 const CHURCH_JWT_SECRET = process.env.CHURCH_JWT_SECRET || process.env.ADMIN_TOKEN || "bsg-church-dev-secret";
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const SITE_URL = process.env.SITE_URL || "https://biblestudygenius.com";
+const API_BASE = process.env.PUBLIC_API_URL || "https://biblestudygenius-api-production.up.railway.app";
+const PODCAST_COVER = process.env.PODCAST_COVER_URL || `${SITE_URL}/assets/brand/podcast-cover.jpg`;
 const ASSETS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "assets");
 
 // Generic church-name words that don't identify a specific church (so they
@@ -400,6 +402,63 @@ async function latestSermon(churchId) {
   return rows[0] || null;
 }
 
+/* ---------- per-church podcast RSS (Apple Podcasts / Spotify) ---------- */
+const xmlEsc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const cdata = (s) => `<![CDATA[${String(s || "").replace(/\]\]>/g, "]]]]><![CDATA[>")}]]>`;
+const rssDate = (ms) => new Date(ms || Date.now()).toUTCString();
+function fmtDuration(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const p = (n) => String(n).padStart(2, "0");
+  return h ? `${h}:${p(m)}:${p(s)}` : `${m}:${p(s)}`;
+}
+
+// Build a valid podcast RSS 2.0 feed (iTunes namespace) for one church from its stored sermons.
+async function buildChurchFeed(church) {
+  const rows = (await pool.query(
+    `SELECT id, title, audio_url, summary, sermon_ts, sermon_start_sec, sermon_end_sec
+       FROM sermons WHERE church_id = $1 AND audio_url IS NOT NULL
+       ORDER BY sermon_ts DESC NULLS LAST, processed_at DESC LIMIT 300`,
+    [church.id]
+  )).rows;
+  const name = church.display_name || church.name;
+  const selfUrl = `${API_BASE}/church/${church.id}/feed.xml`;
+  const siteLink = `${SITE_URL}/church/${church.id}`;
+  const cover = church.logo_url || PODCAST_COVER;
+  const email = church.contact_email || "podcasts@biblestudygenius.com";
+  const desc = `Weekly sermons from ${name}, with a daily Bible study plan for each message in the free Bible Study Genius app.`;
+  const items = rows.map((r) => {
+    const dur = (r.sermon_end_sec != null && r.sermon_start_sec != null) ? (r.sermon_end_sec - r.sermon_start_sec) : null;
+    return `    <item>
+      <title>${xmlEsc(r.title || "Sermon")}</title>
+      <description>${cdata(r.summary || "")}</description>
+      <itunes:summary>${cdata(r.summary || "")}</itunes:summary>
+      <pubDate>${rssDate(Number(r.sermon_ts) || Date.now())}</pubDate>
+      <enclosure url="${xmlEsc(r.audio_url)}" type="audio/mpeg" length="0"/>
+      <guid isPermaLink="false">bsg-${church.id}-${r.id}</guid>${dur != null ? `\n      <itunes:duration>${fmtDuration(dur)}</itunes:duration>` : ""}
+      <itunes:explicit>false</itunes:explicit>
+    </item>`;
+  }).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>${xmlEsc(name)}</title>
+    <link>${xmlEsc(siteLink)}</link>
+    <language>en-us</language>
+    <description>${cdata(desc)}</description>
+    <itunes:author>${xmlEsc(name)}</itunes:author>
+    <itunes:summary>${cdata(desc)}</itunes:summary>
+    <itunes:type>episodic</itunes:type>
+    <itunes:owner><itunes:name>${xmlEsc(name)}</itunes:name><itunes:email>${xmlEsc(email)}</itunes:email></itunes:owner>
+    <itunes:image href="${xmlEsc(cover)}"/>
+    <itunes:category text="Religion &amp; Spirituality"><itunes:category text="Christianity"/></itunes:category>
+    <itunes:explicit>false</itunes:explicit>
+    <atom:link href="${xmlEsc(selfUrl)}" rel="self" type="application/rss+xml"/>
+${items}
+  </channel>
+</rss>`;
+}
+
 export function mountChurches(app) {
   initChurches().catch((e) => console.error("initChurches", e));
 
@@ -754,6 +813,22 @@ export function mountChurches(app) {
       res.json({ churches: r.rows });
     } catch (e) {
       res.status(500).json({ error: String((e && e.message) || e), churches: [] });
+    }
+  });
+
+  // Per-church podcast RSS feed — submit this URL to Apple Podcasts & Spotify.
+  app.get("/church/:id/feed.xml", async (req, res) => {
+    if (!/^\d+$/.test(String(req.params.id))) return res.status(404).send("not found");
+    try {
+      const c = await pool.query(`SELECT * FROM churches WHERE id = $1 AND active`, [parseInt(req.params.id, 10)]);
+      if (!c.rows[0]) return res.status(404).send("church not found");
+      const xml = await buildChurchFeed(c.rows[0]);
+      res.set("Content-Type", "application/rss+xml; charset=utf-8");
+      res.set("Cache-Control", "public, max-age=1800");
+      res.send(xml);
+    } catch (e) {
+      console.error("GET /church/:id/feed.xml", e);
+      res.status(500).send("error building feed");
     }
   });
 
