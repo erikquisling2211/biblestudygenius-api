@@ -230,6 +230,76 @@ export async function scrapeWixSermons(pageUrl, { limit = 30 } = {}) {
   return { count: items.length, sermons: items.slice(0, limit) };
 }
 
+/* ---------- unified source detection (for self-serve church signup) ---------- */
+// Given any church URL (homepage, podcast feed, YouTube channel, Wix page), work out
+// how to pull their sermons and return a few samples as proof. Used by /detect and /signup.
+// -> { found:true, sourceType:"feed"|"youtube"|"scrape", sourceUrl, sampleSermons:[{title,date}] }
+//    { found:false, reason }
+export async function detectSermonSource(inputUrl) {
+  const raw = String(inputUrl || "").trim();
+  if (!raw) return { found: false, reason: "no url" };
+  const norm = /^https?:\/\//i.test(raw) ? raw : "https://" + raw;
+  const sample = (arr, n = 5) => arr.slice(0, n).map((x) => ({ title: x.title || "", date: x.date || "" }));
+
+  // 1) Direct YouTube channel / video URL.
+  if (/youtube\.com|youtu\.be/i.test(norm)) {
+    try {
+      const r = await searchChannelVideos(norm, 5);
+      if (!r.error && r.entries && r.entries.length)
+        return { found: true, sourceType: "youtube", sourceUrl: norm, sampleSermons: sample(r.entries) };
+    } catch { /* fall through */ }
+  }
+
+  // 2) Direct podcast RSS.
+  if (/\.(rss|xml)(\?|$)|\/feed\b|feeds?\./i.test(norm)) {
+    try {
+      const ep = await latestEpisode(norm, 0);
+      if (ep && ep.audio) return { found: true, sourceType: "feed", sourceUrl: norm, sampleSermons: [{ title: ep.title, date: ep.date }] };
+    } catch { /* fall through */ }
+  }
+
+  // 3) Fetch the page and sniff its platform.
+  let html = "";
+  try {
+    const res = await fetchViaProxyIfBlocked(norm, { headers: { "User-Agent": BROWSER_UA } });
+    if (res.ok) html = await res.text();
+  } catch { /* no html */ }
+
+  if (html) {
+    // 3a) Wix embedded audio (the detector we already have).
+    if (/wix:audio:/i.test(html)) {
+      try {
+        const w = await scrapeWixSermons(norm);
+        if (!w.error && w.sermons && w.sermons.length)
+          return { found: true, sourceType: "scrape", sourceUrl: norm, sampleSermons: sample(w.sermons) };
+      } catch { /* fall through */ }
+    }
+    // 3b) RSS autodiscovery (<link rel=alternate type=application/rss+xml>, or a feeds.* URL).
+    let feedUrl =
+      ((html.match(/<link[^>]+type=["']application\/rss\+xml["'][^>]*>/i) || [])[0] || "")
+        .match(/href=["']([^"']+)["']/i)?.[1] ||
+      (html.match(/https?:\/\/[^"'<> ]*(?:feeds?\.[^"'<> ]+|\/feed\/podcast[^"'<> ]*)/i) || [])[0] || "";
+    if (feedUrl) {
+      if (feedUrl.startsWith("/")) { try { feedUrl = new URL(norm).origin + feedUrl; } catch {} }
+      try {
+        const ep = await latestEpisode(feedUrl, 0);
+        if (ep && ep.audio) return { found: true, sourceType: "feed", sourceUrl: feedUrl, sampleSermons: [{ title: ep.title, date: ep.date }] };
+      } catch { /* fall through */ }
+    }
+    // 3c) A YouTube channel linked from the page.
+    const ytLink = (html.match(/https?:\/\/(?:www\.)?youtube\.com\/(?:channel\/|@|c\/|user\/)[A-Za-z0-9_\-.]+/i) || [])[0];
+    if (ytLink) {
+      try {
+        const r = await searchChannelVideos(ytLink, 5);
+        if (!r.error && r.entries && r.entries.length)
+          return { found: true, sourceType: "youtube", sourceUrl: ytLink, sampleSermons: sample(r.entries) };
+      } catch { /* fall through */ }
+    }
+  }
+
+  return { found: false, reason: "no recognizable sermon source" };
+}
+
 // Captivate's CDN fingerprint-blocks Node's undici (404) but allows Python's urllib.
 // Download via a python3 subprocess: try direct first, fall back to the proxy for hosts
 // that block our server IP. python3 is already installed (for yt-dlp).
