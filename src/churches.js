@@ -101,6 +101,18 @@ async function initChurches() {
     const ts = (row.sermon_date && Date.parse(row.sermon_date)) || 0;
     await pool.query(`UPDATE sermons SET sermon_ts = $1 WHERE id = $2`, [ts, row.id]);
   }
+  // Engagement events (anonymous) for per-church analytics.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sermon_events (
+      id SERIAL PRIMARY KEY,
+      church_id INTEGER NOT NULL,
+      sermon_id INTEGER,
+      type TEXT NOT NULL,
+      anon_id TEXT,
+      created_at BIGINT NOT NULL
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS sermon_events_idx ON sermon_events(church_id, created_at DESC);`);
   console.log("✅ Churches tables ready");
 }
 
@@ -399,6 +411,70 @@ export function mountChurches(app) {
       const sermons = await churchSermons(id, 50);
       res.json({ church: c.rows[0], sermon: sermons[0] || null, sermons });
     } catch (e) {
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
+  // --- Engagement analytics ---
+  const EVENT_TYPES = new Set(["follow", "unfollow", "play", "video_play", "plan_open", "download", "view"]);
+
+  // App posts anonymous engagement events here (no auth, no PII — just an anon device id).
+  app.post("/events", async (req, res) => {
+    try {
+      const b = req.body || {};
+      const churchId = parseInt(b.churchId, 10);
+      const type = String(b.type || "").trim();
+      if (!Number.isFinite(churchId) || !EVENT_TYPES.has(type)) return res.status(400).json({ error: "bad event" });
+      const sermonId = Number.isFinite(parseInt(b.sermonId, 10)) ? parseInt(b.sermonId, 10) : null;
+      const anonId = String(b.anonId || "").slice(0, 64) || null;
+      await pool.query(
+        `INSERT INTO sermon_events (church_id, sermon_id, type, anon_id, created_at) VALUES ($1,$2,$3,$4,$5)`,
+        [churchId, sermonId, type, anonId, Date.now()]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("POST /events", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
+  // Church-facing engagement summary (token-gated for now; later per-church login).
+  app.get("/admin/church/:id/stats", async (req, res) => {
+    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
+    const id = parseInt(req.params.id, 10);
+    const wk = Date.now() - 7 * 86400000;
+    try {
+      const q = (sql, params = [id]) => pool.query(sql, params);
+      const [followers, listeners, plays, playsWk, planOpens, downloads, perSermon] = await Promise.all([
+        q(`SELECT COUNT(*)::int AS n FROM (
+             SELECT anon_id,
+               MAX(CASE WHEN type='follow' THEN created_at END) AS lf,
+               MAX(CASE WHEN type='unfollow' THEN created_at END) AS lu
+             FROM sermon_events WHERE church_id=$1 AND type IN ('follow','unfollow') AND anon_id IS NOT NULL
+             GROUP BY anon_id
+           ) t WHERE lf IS NOT NULL AND (lu IS NULL OR lf > lu)`),
+        q(`SELECT COUNT(DISTINCT anon_id)::int AS n FROM sermon_events WHERE church_id=$1 AND type IN ('play','video_play')`),
+        q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type IN ('play','video_play')`),
+        q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type IN ('play','video_play') AND created_at > $2`, [id, wk]),
+        q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type='plan_open'`),
+        q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type='download'`),
+        q(`SELECT e.sermon_id, s.title, COUNT(*)::int AS plays
+             FROM sermon_events e LEFT JOIN sermons s ON s.id = e.sermon_id
+             WHERE e.church_id=$1 AND e.type IN ('play','video_play') AND e.sermon_id IS NOT NULL
+             GROUP BY e.sermon_id, s.title ORDER BY plays DESC LIMIT 10`),
+      ]);
+      res.json({
+        churchId: id,
+        followers: followers.rows[0].n,
+        uniqueListeners: listeners.rows[0].n,
+        totalPlays: plays.rows[0].n,
+        playsLast7: playsWk.rows[0].n,
+        planOpens: planOpens.rows[0].n,
+        downloads: downloads.rows[0].n,
+        topSermons: perSermon.rows,
+      });
+    } catch (e) {
+      console.error("GET /admin/church/:id/stats", e);
       res.status(500).json({ error: String((e && e.message) || e) });
     }
   });
