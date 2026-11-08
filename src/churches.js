@@ -15,8 +15,12 @@ import { processPodcastFeed, processYouTube, latestEpisode, searchYouTube, searc
 import cron from "node-cron";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const CHURCH_JWT_SECRET = process.env.CHURCH_JWT_SECRET || process.env.ADMIN_TOKEN || "bsg-church-dev-secret";
+const ASSETS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "assets");
 
 // Generic church-name words that don't identify a specific church (so they
 // don't let a lookalike channel like "Fellowship Bible Church WV" score high).
@@ -256,6 +260,10 @@ async function latestSermon(churchId) {
 
 export function mountChurches(app) {
   initChurches().catch((e) => console.error("initChurches", e));
+
+  // Serve brand imagery (sunrise photos, app icon) for the website — e.g.
+  // /assets/votd/votd-sunrise.jpg, /assets/brand/icon.png
+  app.use("/assets", express.static(ASSETS_DIR, { maxAge: "7d" }));
 
   // Weekly auto-processing: Mondays at 6:00 AM Central (after Sunday services are posted).
   if (cron.validate("0 6 * * 1")) {
