@@ -164,6 +164,72 @@ export async function processAudioUrl(audioUrl, { title = "", date = "" } = {}) 
   }
 }
 
+/* ---------- feed-less sites: scrape embedded audio (e.g. Wix) ---------- */
+// Wix stores sermon audio in the page HTML as references like
+//   wix:audio://v1/<id>.mp3/<original filename>.mp3#duration=<sec>
+// (the public music.wixstatic.com URL is assembled by JS only at play time).
+// We read those refs straight from the HTML — no headless browser — build the
+// public URL from the media id, and pull the title + date out of the filename.
+
+// First VALID M/D/Y anywhere in a string (skips scripture ranges like "9-51-10-1").
+function parseLooseDate(name) {
+  const re = /(\d{1,2})[._\/-](\d{1,2})[._\/-](\d{2,4})/g;
+  let m;
+  while ((m = re.exec(name))) {
+    let mo = +m[1], d = +m[2], y = +m[3];
+    if (y < 100) y += 2000;
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && y >= 2000 && y <= 2100) {
+      const dt = new Date(Date.UTC(y, mo - 1, d));
+      if (!isNaN(dt.getTime())) return dt;
+    }
+  }
+  return null;
+}
+
+// Drop a leading date token so the title is clean ("8.16.26 - Luke 9 - X" -> "Luke 9 - X").
+function cleanSermonTitle(name) {
+  const base = String(name).replace(/\.mp3$/i, "").trim();
+  const t = base.replace(/^\s*\d{1,2}[._\/-]\d{1,2}[._\/-]\d{2,4}\s*[-–—:]*\s*/, "").trim();
+  return t || base;
+}
+
+// Scrape a Wix-style page for its sermon audio, newest first.
+// -> { count, sermons: [{ audioUrl, title, date("YYYY-MM-DD"|""), duration }] }
+export async function scrapeWixSermons(pageUrl, { limit = 30 } = {}) {
+  const res = await fetchViaProxyIfBlocked(pageUrl, { headers: { "User-Agent": BROWSER_UA } });
+  if (!res.ok) return { error: "page " + res.status };
+  let html = await res.text();
+  html = html.replace(/\\\//g, "/"); // un-escape JSON slashes so the refs are matchable
+  const re = /wix:audio:\/\/v1\/([0-9a-f]{6}_[0-9a-f]{32}\.mp3)\/([^"#\\?]+?\.mp3)(?:#duration=(\d+))?/gi;
+  const seen = new Set();
+  const items = [];
+  let m;
+  while ((m = re.exec(html))) {
+    const id = m[1];
+    if (seen.has(id)) continue;
+    seen.add(id);
+    let name = m[2];
+    try { name = decodeURIComponent(name); } catch { /* keep raw */ }
+    const dt = parseLooseDate(name);
+    items.push({
+      audioUrl: "https://music.wixstatic.com/mp3/" + id,
+      title: cleanSermonTitle(name),
+      date: dt ? dt.toISOString().slice(0, 10) : "",
+      duration: m[3] ? parseInt(m[3], 10) : null,
+      _ord: items.length,
+    });
+  }
+  // Newest first: dated items by date desc, undated kept in document order after them.
+  items.sort((a, b) => {
+    if (a.date && b.date) return a.date < b.date ? 1 : a.date > b.date ? -1 : 0;
+    if (a.date) return -1;
+    if (b.date) return 1;
+    return a._ord - b._ord;
+  });
+  for (const it of items) delete it._ord;
+  return { count: items.length, sermons: items.slice(0, limit) };
+}
+
 // Captivate's CDN fingerprint-blocks Node's undici (404) but allows Python's urllib.
 // Download via a python3 subprocess: try direct first, fall back to the proxy for hosts
 // that block our server IP. python3 is already installed (for yt-dlp).

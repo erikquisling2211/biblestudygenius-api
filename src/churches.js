@@ -11,7 +11,7 @@
  *   GET  /church/:id                   church detail + latest sermon (app)
  */
 import { pool } from "./db.js";
-import { processPodcastFeed, processYouTube, latestEpisode, searchYouTube, searchChannelVideos, processAudioUrl } from "./sermonprocess.js";
+import { processPodcastFeed, processYouTube, latestEpisode, searchYouTube, searchChannelVideos, processAudioUrl, scrapeWixSermons } from "./sermonprocess.js";
 import cron from "node-cron";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -104,6 +104,8 @@ async function initChurches() {
   await pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS aliases TEXT;`);
   // numeric sermon timestamp (epoch ms) for chronological ordering / archive
   await pool.query(`ALTER TABLE sermons ADD COLUMN IF NOT EXISTS sermon_ts BIGINT;`);
+  // Feed-less churches (e.g. Wix): the page we scrape for embedded sermon audio.
+  await pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS scrape_url TEXT;`);
   const miss = await pool.query(`SELECT id, sermon_date FROM sermons WHERE sermon_ts IS NULL`);
   for (const row of miss.rows) {
     const ts = (row.sermon_date && Date.parse(row.sermon_date)) || 0;
@@ -225,6 +227,40 @@ async function saveSermon(churchId, r, opts = {}) {
   return s.rows[0].id;
 }
 
+// Resolve a feed-less church's sermon(s) from its scrape_url and run the pipeline.
+// index=null (cron): newest scraped sermon not already stored (by audio_url); dedup prevents reprocessing.
+// index=N (manual): process that item from the newest-first list.
+// Shared by the /scrape endpoint and the weekly cron.
+async function processScrapedChurch(church, { index = null } = {}) {
+  const url = church.scrape_url;
+  if (!url) return { error: "church has no scrape_url" };
+  const r = await scrapeWixSermons(url);
+  if (r.error) return { error: r.error };
+  if (!r.sermons || !r.sermons.length) return { error: "no audio found on page" };
+
+  let item;
+  if (index != null) {
+    item = r.sermons[index];
+    if (!item) return { error: `index ${index} out of range (found ${r.sermons.length})` };
+  } else {
+    for (const s of r.sermons) {
+      const ex = await pool.query(`SELECT 1 FROM sermons WHERE church_id = $1 AND audio_url = $2 LIMIT 1`, [church.id, s.audioUrl]);
+      if (!ex.rows.length) { item = s; break; }
+    }
+    if (!item) return { skipped: true, reason: "latest already processed" };
+  }
+
+  const result = await processAudioUrl(item.audioUrl, { title: item.title, date: item.date });
+  if (result.error) return { error: result.error };
+  const sermonId = await saveSermon(church.id, result, {});
+  let videoId = null;
+  try {
+    const m = await matchVideoForSermon({ id: sermonId, title: result.title }, church);
+    if (m.ok) { await pool.query(`UPDATE sermons SET video_id = $1 WHERE id = $2`, [m.best.id, sermonId]); videoId = m.best.id; }
+  } catch (e) { console.error(`scrape video ${church.name}:`, (e && e.message) || e); }
+  return { sermonId, title: result.title, date: item.date, audioUrl: item.audioUrl, videoId, ...result };
+}
+
 // Process every active church that has a podcast feed (audio + study plan). Used by the weekly cron.
 async function processAllChurches() {
   const { rows } = await pool.query(`SELECT id, name, youtube_url, feed_url FROM churches WHERE active AND feed_url IS NOT NULL ORDER BY id`);
@@ -248,6 +284,25 @@ async function processAllChurches() {
       console.error(`cron ${ch.name} failed:`, (e && e.message) || e);
     }
   }
+
+  // Feed-less churches (e.g. Wix): scrape the site for the latest sermon audio.
+  const scrapeRows = (await pool.query(
+    `SELECT * FROM churches WHERE active AND scrape_url IS NOT NULL AND feed_url IS NULL ORDER BY id`
+  )).rows;
+  if (scrapeRows.length) console.log(`⏰ Weekly scrape: ${scrapeRows.length} feed-less church(es)`);
+  for (const ch of scrapeRows) {
+    try {
+      const r = await processScrapedChurch(ch, {});
+      if (r.error) { out.push({ church: ch.id, name: ch.name, error: r.error }); console.error(`cron scrape ${ch.name}:`, r.error); continue; }
+      if (r.skipped) { out.push({ church: ch.id, name: ch.name, skipped: true }); console.log(`↳ ${ch.name} (scrape): ${r.reason}`); continue; }
+      out.push({ church: ch.id, name: ch.name, sermonId: r.sermonId, title: r.title, videoId: r.videoId, scraped: true });
+      console.log(`✅ ${ch.name} (scrape) -> sermon ${r.sermonId}: ${r.title}${r.videoId ? " (video " + r.videoId + ")" : ""}`);
+    } catch (e) {
+      out.push({ church: ch.id, name: ch.name, error: String((e && e.message) || e) });
+      console.error(`cron scrape ${ch.name} failed:`, (e && e.message) || e);
+    }
+  }
+
   console.log("⏰ Weekly run complete");
   return out;
 }
@@ -285,10 +340,10 @@ export function mountChurches(app) {
     if (!b.name) return res.status(400).json({ error: "name required" });
     try {
       const r = await pool.query(
-        `INSERT INTO churches (name,city,state,zip,lat,lon,denomination,website,feed_url,youtube_url,aliases,active,created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,$12) RETURNING *`,
+        `INSERT INTO churches (name,city,state,zip,lat,lon,denomination,website,feed_url,youtube_url,aliases,scrape_url,active,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13) RETURNING *`,
         [b.name, b.city || null, b.state || null, b.zip || null, b.lat ?? null, b.lon ?? null,
-         b.denomination || null, b.website || null, b.feed_url || null, b.youtube_url || null, b.aliases || null, Date.now()]
+         b.denomination || null, b.website || null, b.feed_url || null, b.youtube_url || null, b.aliases || null, b.scrape_url || null, Date.now()]
       );
       res.json(r.rows[0]);
     } catch (e) {
@@ -368,6 +423,38 @@ export function mountChurches(app) {
       res.json({ churchId: id, sermonId, video, ...result });
     } catch (e) {
       console.error("POST /admin/church/:id/audio", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
+  // Scrape a feed-less site (e.g. Wix) for embedded sermon audio and process the latest.
+  // POST /admin/church/:id/scrape
+  //   ?url=        override / set the church's scrape_url (persisted for future weekly runs)
+  //   ?list=1      just return the sermons found on the page (no processing)
+  //   ?index=N     process item N from the newest-first list (default: newest not yet stored)
+  app.post("/admin/church/:id/scrape", async (req, res) => {
+    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
+    const id = parseInt(req.params.id, 10);
+    try {
+      const c = await pool.query(`SELECT * FROM churches WHERE id = $1`, [id]);
+      const church = c.rows[0];
+      if (!church) return res.status(404).json({ error: "church not found" });
+      const url = String(req.query.url || church.scrape_url || "").trim();
+      if (!url) return res.status(400).json({ error: "no scrape_url (pass ?url= or set it on the church)" });
+      // Persist a newly-supplied scrape_url so the weekly cron keeps this church updated.
+      if (req.query.url && url !== church.scrape_url) {
+        await pool.query(`UPDATE churches SET scrape_url = $1 WHERE id = $2`, [url, id]);
+        church.scrape_url = url;
+      }
+      if (String(req.query.list || "") === "1") {
+        return res.json(await scrapeWixSermons(url));
+      }
+      const index = req.query.index != null ? parseInt(req.query.index, 10) : null;
+      const out = await processScrapedChurch(church, { index });
+      if (out.error) return res.status(502).json(out);
+      res.json({ churchId: id, ...out });
+    } catch (e) {
+      console.error("POST /admin/church/:id/scrape", e);
       res.status(500).json({ error: String((e && e.message) || e) });
     }
   });
@@ -453,7 +540,7 @@ export function mountChurches(app) {
     if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
     const id = parseInt(req.params.id, 10);
     const b = { ...req.query, ...(req.body || {}) };
-    const allowed = ["name", "city", "state", "zip", "denomination", "website", "feed_url", "youtube_url", "aliases"];
+    const allowed = ["name", "city", "state", "zip", "denomination", "website", "feed_url", "youtube_url", "aliases", "scrape_url"];
     const sets = []; const vals = []; let i = 1;
     for (const k of allowed) {
       if (b[k] != null) { sets.push(`${k} = $${i++}`); vals.push(b[k]); }
