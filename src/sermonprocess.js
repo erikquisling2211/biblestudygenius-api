@@ -216,6 +216,32 @@ async function downloadYouTubeAudio(vid, base) {
   });
   return `${base}.mp3`;
 }
+// Search YouTube for candidate videos (flat metadata only; no download).
+// Reuses the same proxy + player-client impersonation as the audio path.
+export async function searchYouTube(query, n = 6) {
+  const youtubedl = (await import("youtube-dl-exec")).default;
+  let out;
+  try {
+    out = await youtubedl(`ytsearch${n}:${query}`, {
+      flatPlaylist: true,
+      dumpSingleJson: true,
+      noCheckCertificates: true,
+      noWarnings: true,
+      extractorArgs: "youtube:player_client=tv,web_safari,ios",
+      ...(PROXY_URL ? { proxy: PROXY_URL } : {}),
+      addHeader: ["referer:youtube.com", "user-agent:Mozilla/5.0"],
+    });
+  } catch (e) {
+    return { error: String((e && e.message) || e), entries: [] };
+  }
+  const entries = (out && out.entries) || [];
+  return {
+    entries: entries
+      .map((e) => ({ id: e.id, title: e.title || "", channel: e.channel || e.uploader || "", duration: e.duration || 0 }))
+      .filter((e) => e.id),
+  };
+}
+
 async function findSermonSpan(segments) {
   const lines = segments.map((s) => `[${Math.round(s.start)}] ${(s.text || "").trim()}`).join("\n");
   const r = await openai.chat.completions.create({

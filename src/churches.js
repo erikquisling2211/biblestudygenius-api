@@ -11,7 +11,7 @@
  *   GET  /church/:id                   church detail + latest sermon (app)
  */
 import { pool } from "./db.js";
-import { processPodcastFeed, processYouTube, latestEpisode } from "./sermonprocess.js";
+import { processPodcastFeed, processYouTube, latestEpisode, searchYouTube } from "./sermonprocess.js";
 import cron from "node-cron";
 
 async function initChurches() {
@@ -237,6 +237,48 @@ export function mountChurches(app) {
       res.json(r.rows[0]);
     } catch (e) {
       console.error("POST /admin/sermon/:id/video", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
+  // Find the matching YouTube video for a sermon (by church name + title) and set its videoId.
+  // ?apply=0 returns candidates without writing. Reusable by the weekly cron.
+  app.post("/admin/sermon/:id/findvideo", async (req, res) => {
+    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
+    const id = parseInt(req.params.id, 10);
+    try {
+      const sres = await pool.query(
+        `SELECT s.id, s.title, s.church_id, c.name AS church_name
+           FROM sermons s JOIN churches c ON c.id = s.church_id WHERE s.id = $1`,
+        [id]
+      );
+      if (!sres.rows.length) return res.status(404).json({ error: "sermon not found" });
+      const s = sres.rows[0];
+      // Strip trailing "| series | date" and "- speaker" noise for a cleaner query.
+      const cleanTitle = String(s.title || "").split("|")[0].split(" - ")[0].trim() || String(s.title || "");
+      const query = `${s.church_name} ${cleanTitle} sermon`;
+      const sr = await searchYouTube(query, 6);
+      if (sr.error) return res.status(502).json({ error: `youtube search failed: ${sr.error}`, query });
+      const cands = sr.entries || [];
+
+      const norm = (x) => (x || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+      const stTokens = new Set(norm(s.title));
+      const cnTokens = new Set(norm(s.church_name));
+      let best = null, bestScore = -1;
+      for (const c of cands) {
+        let score = 0;
+        for (const w of norm(c.title)) if (stTokens.has(w)) score += 2;
+        for (const w of norm(c.channel)) if (cnTokens.has(w)) score += 3;
+        if (c.duration && c.duration >= 1200) score += 2;   // sermon-length
+        if (c.duration && c.duration < 300) score -= 3;      // clip/short
+        if (score > bestScore) { bestScore = score; best = c; }
+      }
+
+      const apply = String(req.query.apply || "1") !== "0" && best && bestScore >= 4;
+      if (apply) await pool.query(`UPDATE sermons SET video_id = $1 WHERE id = $2`, [best.id, id]);
+      res.json({ sermonId: id, query, applied: !!apply, videoId: apply ? best.id : null, bestScore, best, candidates: cands });
+    } catch (e) {
+      console.error("POST /admin/sermon/:id/findvideo", e);
       res.status(500).json({ error: String((e && e.message) || e) });
     }
   });
