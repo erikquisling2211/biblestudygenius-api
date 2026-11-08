@@ -242,6 +242,50 @@ export async function searchYouTube(query, n = 6) {
   };
 }
 
+// Normalize a channel reference (UC id, @handle, or full URL) to a /videos listing URL.
+function channelUrl(ref) {
+  ref = String(ref || "").trim();
+  if (!ref) return null;
+  if (/^https?:\/\//i.test(ref)) {
+    if (/youtube\.com\/(@[^/]+|channel\/[^/]+|c\/[^/]+|user\/[^/]+)\/?$/i.test(ref)) return ref.replace(/\/$/, "") + "/videos";
+    return ref;
+  }
+  if (/^UC[\w-]{20,}$/.test(ref)) return `https://www.youtube.com/channel/${ref}/videos`;
+  if (ref.startsWith("@")) return `https://www.youtube.com/${ref}/videos`;
+  return `https://www.youtube.com/@${ref}/videos`;
+}
+
+// List a channel's recent uploads (flat metadata only). Every result is guaranteed
+// to be from that channel, so matching a sermon by title can't pick a lookalike church.
+export async function searchChannelVideos(ref, n = 15) {
+  const url = channelUrl(ref);
+  if (!url) return { error: "no channel", entries: [] };
+  const youtubedl = (await import("youtube-dl-exec")).default;
+  let out;
+  try {
+    out = await youtubedl(url, {
+      flatPlaylist: true,
+      dumpSingleJson: true,
+      playlistEnd: n,
+      noCheckCertificates: true,
+      noWarnings: true,
+      extractorArgs: "youtube:player_client=tv,web_safari,ios",
+      ...(PROXY_URL ? { proxy: PROXY_URL } : {}),
+      addHeader: ["referer:youtube.com", "user-agent:Mozilla/5.0"],
+    });
+  } catch (e) {
+    return { error: String((e && e.message) || e), entries: [] };
+  }
+  const entries = (out && out.entries) || [];
+  const chName = (out && out.title) || "";
+  return {
+    channel: chName,
+    entries: entries
+      .map((e) => ({ id: e.id, title: e.title || "", channel: e.channel || e.uploader || chName, duration: e.duration || 0 }))
+      .filter((e) => e.id),
+  };
+}
+
 async function findSermonSpan(segments) {
   const lines = segments.map((s) => `[${Math.round(s.start)}] ${(s.text || "").trim()}`).join("\n");
   const r = await openai.chat.completions.create({

@@ -11,8 +11,55 @@
  *   GET  /church/:id                   church detail + latest sermon (app)
  */
 import { pool } from "./db.js";
-import { processPodcastFeed, processYouTube, latestEpisode, searchYouTube } from "./sermonprocess.js";
+import { processPodcastFeed, processYouTube, latestEpisode, searchYouTube, searchChannelVideos } from "./sermonprocess.js";
 import cron from "node-cron";
+
+// Generic church-name words that don't identify a specific church (so they
+// don't let a lookalike channel like "Fellowship Bible Church WV" score high).
+const GENERIC_TOKENS = new Set([
+  "church", "bible", "fellowship", "community", "christian", "gospel", "baptist",
+  "methodist", "presbyterian", "lutheran", "chapel", "faith", "first", "the", "and",
+  "god", "christ", "jesus", "life", "worship", "center", "assembly", "ministries",
+  "ministry", "cathedral", "parish", "congregation", "sermon", "sermons", "service",
+  "full", "part", "sunday",
+]);
+const tokenize = (x) =>
+  (x || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+
+// Find the best-matching YouTube video for a sermon. If the church has a
+// youtube_url (a channel), search INSIDE it — every result is the right church,
+// so a title match is reliable. Otherwise fall back to a global search, where
+// only distinctive (non-generic) channel tokens count, to avoid lookalikes.
+async function matchVideoForSermon(sermon, church) {
+  const cleanTitle = String(sermon.title || "").split("|")[0].split(" - ")[0].trim() || String(sermon.title || "");
+  let cands = [];
+  let scoped = false;
+  if (church.youtube_url) {
+    const r = await searchChannelVideos(church.youtube_url, 15);
+    if (!r.error && r.entries.length) { cands = r.entries; scoped = true; }
+  }
+  if (!cands.length) {
+    const r = await searchYouTube(`${church.name} ${cleanTitle} sermon`, 6);
+    if (r.error) return { error: r.error, scoped: false };
+    cands = r.entries;
+  }
+  const stTokens = new Set(tokenize(sermon.title));
+  const cnTokens = new Set(tokenize(church.name).filter((w) => !GENERIC_TOKENS.has(w)));
+  let best = null, bestScore = -1;
+  for (const c of cands) {
+    let score = 0;
+    for (const w of tokenize(c.title)) if (stTokens.has(w)) score += 2;
+    if (!scoped) for (const w of tokenize(c.channel)) if (cnTokens.has(w)) score += 4; // distinctive only
+    if (c.duration && c.duration >= 1200) score += 2;   // sermon-length
+    if (c.duration && c.duration < 300) score -= 3;      // clip/short
+    if (score > bestScore) { bestScore = score; best = c; }
+  }
+  // Channel-scoped: already the right church, so a modest title match is enough.
+  // Global: require a stronger signal (distinctive channel + title overlap).
+  const threshold = scoped ? 4 : 8;
+  const ok = !!(best && bestScore >= threshold);
+  return { best, bestScore, scoped, ok, candidates: cands };
+}
 
 async function initChurches() {
   await pool.query(`
@@ -181,7 +228,20 @@ export function mountChurches(app) {
       const startSec = parseInt(req.query.startSec, 10);
       const endSec = parseInt(req.query.endSec, 10);
       const sermonId = await saveSermon(id, result, { videoId, startSec, endSec });
-      res.json({ churchId: id, sermonId, ...result });
+      // Auto-attach a matching YouTube video when none was supplied (unless ?video=0).
+      let video = null;
+      if (!videoId && String(req.query.video || "1") !== "0") {
+        try {
+          const m = await matchVideoForSermon({ id: sermonId, title: result.title }, church);
+          if (m.ok) {
+            await pool.query(`UPDATE sermons SET video_id = $1 WHERE id = $2`, [m.best.id, sermonId]);
+            video = { videoId: m.best.id, matched: m.best.title, channel: m.best.channel, scoped: m.scoped, score: m.bestScore };
+          } else {
+            video = { videoId: null, reason: m.error ? `search failed: ${m.error}` : `no confident match (best ${m.bestScore})` };
+          }
+        } catch (e) { console.error("auto video match", e); }
+      }
+      res.json({ churchId: id, sermonId, video, ...result });
     } catch (e) {
       console.error("POST /admin/church/:id/process", e);
       res.status(500).json({ error: String((e && e.message) || e) });
@@ -248,35 +308,17 @@ export function mountChurches(app) {
     const id = parseInt(req.params.id, 10);
     try {
       const sres = await pool.query(
-        `SELECT s.id, s.title, s.church_id, c.name AS church_name
+        `SELECT s.id, s.title, s.church_id, c.name AS church_name, c.youtube_url
            FROM sermons s JOIN churches c ON c.id = s.church_id WHERE s.id = $1`,
         [id]
       );
       if (!sres.rows.length) return res.status(404).json({ error: "sermon not found" });
       const s = sres.rows[0];
-      // Strip trailing "| series | date" and "- speaker" noise for a cleaner query.
-      const cleanTitle = String(s.title || "").split("|")[0].split(" - ")[0].trim() || String(s.title || "");
-      const query = `${s.church_name} ${cleanTitle} sermon`;
-      const sr = await searchYouTube(query, 6);
-      if (sr.error) return res.status(502).json({ error: `youtube search failed: ${sr.error}`, query });
-      const cands = sr.entries || [];
-
-      const norm = (x) => (x || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2);
-      const stTokens = new Set(norm(s.title));
-      const cnTokens = new Set(norm(s.church_name));
-      let best = null, bestScore = -1;
-      for (const c of cands) {
-        let score = 0;
-        for (const w of norm(c.title)) if (stTokens.has(w)) score += 2;
-        for (const w of norm(c.channel)) if (cnTokens.has(w)) score += 3;
-        if (c.duration && c.duration >= 1200) score += 2;   // sermon-length
-        if (c.duration && c.duration < 300) score -= 3;      // clip/short
-        if (score > bestScore) { bestScore = score; best = c; }
-      }
-
-      const apply = String(req.query.apply || "1") !== "0" && best && bestScore >= 4;
-      if (apply) await pool.query(`UPDATE sermons SET video_id = $1 WHERE id = $2`, [best.id, id]);
-      res.json({ sermonId: id, query, applied: !!apply, videoId: apply ? best.id : null, bestScore, best, candidates: cands });
+      const m = await matchVideoForSermon({ id: s.id, title: s.title }, { name: s.church_name, youtube_url: s.youtube_url });
+      if (m.error) return res.status(502).json({ error: `youtube search failed: ${m.error}` });
+      const apply = String(req.query.apply || "1") !== "0" && m.ok;
+      if (apply) await pool.query(`UPDATE sermons SET video_id = $1 WHERE id = $2`, [m.best.id, id]);
+      res.json({ sermonId: id, applied: !!apply, scoped: m.scoped, videoId: apply ? m.best.id : null, bestScore: m.bestScore, best: m.best, candidates: m.candidates });
     } catch (e) {
       console.error("POST /admin/sermon/:id/findvideo", e);
       res.status(500).json({ error: String((e && e.message) || e) });
