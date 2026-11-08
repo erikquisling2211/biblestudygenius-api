@@ -13,6 +13,10 @@
 import { pool } from "./db.js";
 import { processPodcastFeed, processYouTube, latestEpisode, searchYouTube, searchChannelVideos } from "./sermonprocess.js";
 import cron from "node-cron";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+
+const CHURCH_JWT_SECRET = process.env.CHURCH_JWT_SECRET || process.env.ADMIN_TOKEN || "bsg-church-dev-secret";
 
 // Generic church-name words that don't identify a specific church (so they
 // don't let a lookalike channel like "Fellowship Bible Church WV" score high).
@@ -113,12 +117,68 @@ async function initChurches() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS sermon_events_idx ON sermon_events(church_id, created_at DESC);`);
+  // Per-church branding for the dashboard.
+  await pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
+  await pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS brand_color TEXT;`);
+  await pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS display_name TEXT;`);
+  // Church dashboard logins (provisioned by admin).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS church_admins (
+      id SERIAL PRIMARY KEY,
+      church_id INTEGER NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      created_at BIGINT NOT NULL
+    );
+  `);
   console.log("✅ Churches tables ready");
 }
 
 function admin(req) {
   const t = process.env.ADMIN_TOKEN;
   return !!t && (req.query.token === t || req.headers["x-admin-token"] === t);
+}
+
+// Verify a church-dashboard JWT; sets req.church = { churchId, adminId, email }.
+function churchAuth(req, res, next) {
+  const h = req.headers.authorization || "";
+  const tok = h.startsWith("Bearer ") ? h.slice(7) : "";
+  try { req.church = jwt.verify(tok, CHURCH_JWT_SECRET); return next(); }
+  catch { return res.status(401).json({ error: "unauthorized" }); }
+}
+
+// Engagement summary for one church (shared by the admin and dashboard endpoints).
+async function churchStats(id) {
+  const wk = Date.now() - 7 * 86400000;
+  const q = (sql, params = [id]) => pool.query(sql, params);
+  const [followers, listeners, plays, playsWk, planOpens, downloads, perSermon] = await Promise.all([
+    q(`SELECT COUNT(*)::int AS n FROM (
+         SELECT anon_id,
+           MAX(CASE WHEN type='follow' THEN created_at END) AS lf,
+           MAX(CASE WHEN type='unfollow' THEN created_at END) AS lu
+         FROM sermon_events WHERE church_id=$1 AND type IN ('follow','unfollow') AND anon_id IS NOT NULL
+         GROUP BY anon_id
+       ) t WHERE lf IS NOT NULL AND (lu IS NULL OR lf > lu)`),
+    q(`SELECT COUNT(DISTINCT anon_id)::int AS n FROM sermon_events WHERE church_id=$1 AND type IN ('play','video_play')`),
+    q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type IN ('play','video_play')`),
+    q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type IN ('play','video_play') AND created_at > $2`, [id, wk]),
+    q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type='plan_open'`),
+    q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type='download'`),
+    q(`SELECT e.sermon_id, s.title, COUNT(*)::int AS plays
+         FROM sermon_events e LEFT JOIN sermons s ON s.id = e.sermon_id
+         WHERE e.church_id=$1 AND e.type IN ('play','video_play') AND e.sermon_id IS NOT NULL
+         GROUP BY e.sermon_id, s.title ORDER BY plays DESC LIMIT 10`),
+  ]);
+  return {
+    churchId: id,
+    followers: followers.rows[0].n,
+    uniqueListeners: listeners.rows[0].n,
+    totalPlays: plays.rows[0].n,
+    playsLast7: playsWk.rows[0].n,
+    planOpens: planOpens.rows[0].n,
+    downloads: downloads.rows[0].n,
+    topSermons: perSermon.rows,
+  };
 }
 
 // Insert a sermon, de-duplicating: a sermon with the same church + date (podcast) or
