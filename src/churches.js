@@ -461,7 +461,8 @@ export function mountChurches(app) {
     }
   });
 
-  app.get("/church/:id", async (req, res) => {
+  app.get("/church/:id", async (req, res, next) => {
+    if (!/^\d+$/.test(String(req.params.id))) return next(); // let /church/me etc. through
     const id = parseInt(req.params.id, 10);
     try {
       const c = await pool.query(
@@ -498,44 +499,97 @@ export function mountChurches(app) {
     }
   });
 
-  // Church-facing engagement summary (token-gated for now; later per-church login).
+  // Admin engagement summary (token-gated).
   app.get("/admin/church/:id/stats", async (req, res) => {
     if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
+    try { res.json(await churchStats(parseInt(req.params.id, 10))); }
+    catch (e) { console.error("GET /admin/church/:id/stats", e); res.status(500).json({ error: String((e && e.message) || e) }); }
+  });
+
+  // --- Church dashboard: provisioning (admin), branding (admin), login + scoped reads (church) ---
+
+  // Create or reset a church's dashboard login (you run this when onboarding a paid church).
+  app.post("/admin/church/:id/admin", async (req, res) => {
+    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
     const id = parseInt(req.params.id, 10);
-    const wk = Date.now() - 7 * 86400000;
+    const b = req.body || {};
+    const email = String(b.email || "").trim().toLowerCase();
+    const password = String(b.password || "");
+    if (!email || password.length < 6) return res.status(400).json({ error: "email and password (min 6 chars) required" });
     try {
-      const q = (sql, params = [id]) => pool.query(sql, params);
-      const [followers, listeners, plays, playsWk, planOpens, downloads, perSermon] = await Promise.all([
-        q(`SELECT COUNT(*)::int AS n FROM (
-             SELECT anon_id,
-               MAX(CASE WHEN type='follow' THEN created_at END) AS lf,
-               MAX(CASE WHEN type='unfollow' THEN created_at END) AS lu
-             FROM sermon_events WHERE church_id=$1 AND type IN ('follow','unfollow') AND anon_id IS NOT NULL
-             GROUP BY anon_id
-           ) t WHERE lf IS NOT NULL AND (lu IS NULL OR lf > lu)`),
-        q(`SELECT COUNT(DISTINCT anon_id)::int AS n FROM sermon_events WHERE church_id=$1 AND type IN ('play','video_play')`),
-        q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type IN ('play','video_play')`),
-        q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type IN ('play','video_play') AND created_at > $2`, [id, wk]),
-        q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type='plan_open'`),
-        q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type='download'`),
-        q(`SELECT e.sermon_id, s.title, COUNT(*)::int AS plays
-             FROM sermon_events e LEFT JOIN sermons s ON s.id = e.sermon_id
-             WHERE e.church_id=$1 AND e.type IN ('play','video_play') AND e.sermon_id IS NOT NULL
-             GROUP BY e.sermon_id, s.title ORDER BY plays DESC LIMIT 10`),
-      ]);
-      res.json({
-        churchId: id,
-        followers: followers.rows[0].n,
-        uniqueListeners: listeners.rows[0].n,
-        totalPlays: plays.rows[0].n,
-        playsLast7: playsWk.rows[0].n,
-        planOpens: planOpens.rows[0].n,
-        downloads: downloads.rows[0].n,
-        topSermons: perSermon.rows,
-      });
+      const hash = await bcrypt.hash(password, 10);
+      await pool.query(
+        `INSERT INTO church_admins (church_id, email, password_hash, created_at) VALUES ($1,$2,$3,$4)
+         ON CONFLICT (email) DO UPDATE SET church_id = EXCLUDED.church_id, password_hash = EXCLUDED.password_hash`,
+        [id, email, hash, Date.now()]
+      );
+      res.json({ ok: true, churchId: id, email });
     } catch (e) {
-      console.error("GET /admin/church/:id/stats", e);
+      console.error("POST /admin/church/:id/admin", e);
       res.status(500).json({ error: String((e && e.message) || e) });
     }
+  });
+
+  // Set a church's dashboard branding.
+  app.post("/admin/church/:id/branding", async (req, res) => {
+    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
+    const id = parseInt(req.params.id, 10);
+    const b = req.body || {};
+    try {
+      await pool.query(
+        `UPDATE churches SET
+           logo_url = COALESCE($2, logo_url),
+           brand_color = COALESCE($3, brand_color),
+           display_name = COALESCE($4, display_name)
+         WHERE id = $1`,
+        [id, b.logoUrl ?? null, b.brandColor ?? null, b.displayName ?? null]
+      );
+      res.json({ ok: true, churchId: id });
+    } catch (e) {
+      console.error("POST /admin/church/:id/branding", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
+  // Church login → JWT.
+  app.post("/church/login", async (req, res) => {
+    const b = req.body || {};
+    const email = String(b.email || "").trim().toLowerCase();
+    const password = String(b.password || "");
+    if (!email || !password) return res.status(400).json({ error: "email and password required" });
+    try {
+      const r = await pool.query(`SELECT id, church_id, password_hash FROM church_admins WHERE email = $1`, [email]);
+      const row = r.rows[0];
+      if (!row || !(await bcrypt.compare(password, row.password_hash))) return res.status(401).json({ error: "invalid credentials" });
+      const token = jwt.sign({ churchId: row.church_id, adminId: row.id, email }, CHURCH_JWT_SECRET, { expiresIn: "30d" });
+      const c = await pool.query(
+        `SELECT id, name, city, state, display_name AS "displayName", logo_url AS "logoUrl", brand_color AS "brandColor" FROM churches WHERE id = $1`,
+        [row.church_id]
+      );
+      res.json({ token, church: c.rows[0] || { id: row.church_id } });
+    } catch (e) {
+      console.error("POST /church/login", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
+  // Logged-in church: its own profile + branding.
+  app.get("/church/me", churchAuth, async (req, res) => {
+    try {
+      const c = await pool.query(
+        `SELECT id, name, city, state, denomination, website, display_name AS "displayName", logo_url AS "logoUrl", brand_color AS "brandColor" FROM churches WHERE id = $1`,
+        [req.church.churchId]
+      );
+      if (!c.rows[0]) return res.status(404).json({ error: "not found" });
+      res.json({ church: c.rows[0] });
+    } catch (e) {
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
+  // Logged-in church: its own engagement stats.
+  app.get("/church/me/stats", churchAuth, async (req, res) => {
+    try { res.json(await churchStats(req.church.churchId)); }
+    catch (e) { console.error("GET /church/me/stats", e); res.status(500).json({ error: String((e && e.message) || e) }); }
   });
 }
