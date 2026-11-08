@@ -155,7 +155,7 @@ function churchAuth(req, res, next) {
 async function churchStats(id) {
   const wk = Date.now() - 7 * 86400000;
   const q = (sql, params = [id]) => pool.query(sql, params);
-  const [followers, listeners, plays, playsWk, planOpens, downloads, perSermon] = await Promise.all([
+  const [followers, listeners, plays, playsWk, planOpens, downloads, shares, perSermon] = await Promise.all([
     q(`SELECT COUNT(*)::int AS n FROM (
          SELECT anon_id,
            MAX(CASE WHEN type='follow' THEN created_at END) AS lf,
@@ -168,6 +168,7 @@ async function churchStats(id) {
     q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type IN ('play','video_play') AND created_at > $2`, [id, wk]),
     q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type='plan_open'`),
     q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type='download'`),
+    q(`SELECT COUNT(*)::int AS n FROM sermon_events WHERE church_id=$1 AND type='share'`),
     q(`SELECT e.sermon_id, s.title, COUNT(*)::int AS plays
          FROM sermon_events e LEFT JOIN sermons s ON s.id = e.sermon_id
          WHERE e.church_id=$1 AND e.type IN ('play','video_play') AND e.sermon_id IS NOT NULL
@@ -181,6 +182,7 @@ async function churchStats(id) {
     playsLast7: playsWk.rows[0].n,
     planOpens: planOpens.rows[0].n,
     downloads: downloads.rows[0].n,
+    shares: shares.rows[0].n,
     topSermons: perSermon.rows,
   };
 }
@@ -485,7 +487,7 @@ export function mountChurches(app) {
   });
 
   // --- Engagement analytics ---
-  const EVENT_TYPES = new Set(["follow", "unfollow", "play", "video_play", "plan_open", "download", "view"]);
+  const EVENT_TYPES = new Set(["follow", "unfollow", "play", "video_play", "plan_open", "download", "view", "share"]);
 
   // App posts anonymous engagement events here (no auth, no PII — just an anon device id).
   app.post("/events", async (req, res) => {
