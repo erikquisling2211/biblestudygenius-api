@@ -227,7 +227,7 @@ async function saveSermon(churchId, r, opts = {}) {
 
 // Process every active church that has a podcast feed (audio + study plan). Used by the weekly cron.
 async function processAllChurches() {
-  const { rows } = await pool.query(`SELECT id, name, feed_url FROM churches WHERE active AND feed_url IS NOT NULL ORDER BY id`);
+  const { rows } = await pool.query(`SELECT id, name, youtube_url, feed_url FROM churches WHERE active AND feed_url IS NOT NULL ORDER BY id`);
   console.log(`⏰ Weekly run: ${rows.length} church(es)`);
   const out = [];
   for (const ch of rows) {
@@ -235,8 +235,14 @@ async function processAllChurches() {
       const result = await processPodcastFeed(ch.feed_url);
       if (result.error) { out.push({ church: ch.id, name: ch.name, error: result.error }); continue; }
       const sermonId = await saveSermon(ch.id, result, {});
-      out.push({ church: ch.id, name: ch.name, sermonId, title: result.title });
-      console.log(`✅ ${ch.name} -> sermon ${sermonId}: ${result.title}`);
+      // Auto-attach a matching YouTube video (same logic as the /process endpoint).
+      let videoId = null;
+      try {
+        const m = await matchVideoForSermon({ id: sermonId, title: result.title }, { name: ch.name, youtube_url: ch.youtube_url });
+        if (m.ok) { await pool.query(`UPDATE sermons SET video_id = $1 WHERE id = $2`, [m.best.id, sermonId]); videoId = m.best.id; }
+      } catch (e) { console.error(`cron video ${ch.name}:`, (e && e.message) || e); }
+      out.push({ church: ch.id, name: ch.name, sermonId, title: result.title, videoId });
+      console.log(`✅ ${ch.name} -> sermon ${sermonId}: ${result.title}${videoId ? " (video " + videoId + ")" : ""}`);
     } catch (e) {
       out.push({ church: ch.id, name: ch.name, error: String((e && e.message) || e) });
       console.error(`cron ${ch.name} failed:`, (e && e.message) || e);
