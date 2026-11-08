@@ -112,28 +112,27 @@ function decodeEntities(s) {
 export // Some podcast CDNs (e.g. Captivate) 404 unknown bot User-Agents, so present a browser UA.
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
-export async function latestEpisode(feedUrl, index = 0) {
+export async function latestEpisode(feedUrl) {
   const res = await fetchViaProxyIfBlocked(feedUrl, { headers: { "User-Agent": BROWSER_UA } });
   if (!res.ok) throw new Error("feed " + res.status);
   const xml = await res.text();
-  // split() yields [preamble, item0, item1, ...]; index 0 = newest episode.
-  const item = xml.split(/<item[\s>]/)[index + 1] || "";
+  const item = xml.split(/<item[\s>]/)[1] || "";
   const pick = (re) => (item.match(re) || [])[1];
   const clean = (s) => decodeEntities((s || "").replace(/<!\[CDATA\[|\]\]>/g, "").trim());
   return {
     title: clean(pick(/<title>([\s\S]*?)<\/title>/)),
     date: clean(pick(/<pubDate>([\s\S]*?)<\/pubDate>/)),
-    audio: decodeEntities(pick(/<enclosure[^>]*url="([^"]+)"/)),
+    audio: pick(/<enclosure[^>]*url="([^"]+)"/),
   };
 }
 
-// Reusable: fetch a feed's episode (index 0 = newest) and return the full study-plan object.
-export async function processPodcastFeed(feed, index = 0) {
+// Reusable: fetch a feed's latest episode and return the full study-plan object.
+export async function processPodcastFeed(feed) {
   const stamp = Date.now();
   const raw = path.join(os.tmpdir(), `sermon_${stamp}.mp3`);
   const small = path.join(os.tmpdir(), `sermon_${stamp}.m4a`);
   try {
-    const ep = await latestEpisode(feed, index);
+    const ep = await latestEpisode(feed);
     if (!ep.audio) return { error: "no audio enclosure in feed", episode: ep };
     await downloadTo(ep.audio, raw);
     await toWhisperAudio(raw, small);
@@ -150,23 +149,13 @@ export async function processPodcastFeed(feed, index = 0) {
 // that block our server IP. python3 is already installed (for yt-dlp).
 const PY_DL = `
 import sys, urllib.request as u
-from urllib.parse import urlsplit
 url, dest = sys.argv[1], sys.argv[2]
 proxy = sys.argv[3] if len(sys.argv) > 3 else ""
-# Podcast-app UA: hosts like Buzzsprout serve media to podcast apps but block browser/bot UAs.
-UA = "AppleCoreMedia/1.0.0 (iPhone; CPU OS 17_0 like Mac OS X)"
-_sp = urlsplit(url)
-REFERER = _sp.scheme + "://" + _sp.netloc + "/"
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 def dl(opener):
-    req = u.Request(url, headers={"User-Agent": UA, "Accept": "*/*", "Referer": REFERER})
+    req = u.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
     with opener.open(req, timeout=180) as r:
-        ct = (r.headers.get("Content-Type") or "").lower()
-        data = r.read()
-    # Some hosts serve a 200-OK HTML anti-bot page to datacenter IPs; treat that as a failure
-    # so the caller retries through the residential proxy.
-    if ("html" in ct) or data[:1] == b"<" or len(data) < 2048:
-        raise Exception("non-audio response (ct=%s len=%d)" % (ct, len(data)))
-    return data
+        return r.read()
 data = None
 try:
     data = dl(u.build_opener())
