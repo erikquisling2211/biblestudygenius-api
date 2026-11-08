@@ -145,6 +145,25 @@ export async function processPodcastFeed(feed, index = 0) {
     fs.unlink(small).catch(() => {});
   }
 }
+// Process a direct audio URL (e.g. a Wix-hosted sermon MP3) with no feed — same
+// transcribe → study-plan pipeline, with the title/date supplied by the caller.
+export async function processAudioUrl(audioUrl, { title = "", date = "" } = {}) {
+  const stamp = Date.now();
+  const raw = path.join(os.tmpdir(), `sermon_${stamp}.mp3`);
+  const small = path.join(os.tmpdir(), `sermon_${stamp}.m4a`);
+  try {
+    if (!audioUrl) return { error: "no audio url" };
+    await downloadTo(audioUrl, raw);
+    await toWhisperAudio(raw, small);
+    const transcript = await transcribePlain(small);
+    const plan = await studyPlan(transcript);
+    return { source: "audio", title, date, audioUrl, transcriptChars: transcript.length, ...plan };
+  } finally {
+    fs.unlink(raw).catch(() => {});
+    fs.unlink(small).catch(() => {});
+  }
+}
+
 // Captivate's CDN fingerprint-blocks Node's undici (404) but allows Python's urllib.
 // Download via a python3 subprocess: try direct first, fall back to the proxy for hosts
 // that block our server IP. python3 is already installed (for yt-dlp).

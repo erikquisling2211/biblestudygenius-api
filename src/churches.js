@@ -11,7 +11,7 @@
  *   GET  /church/:id                   church detail + latest sermon (app)
  */
 import { pool } from "./db.js";
-import { processPodcastFeed, processYouTube, latestEpisode, searchYouTube, searchChannelVideos } from "./sermonprocess.js";
+import { processPodcastFeed, processYouTube, latestEpisode, searchYouTube, searchChannelVideos, processAudioUrl } from "./sermonprocess.js";
 import cron from "node-cron";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -326,6 +326,42 @@ export function mountChurches(app) {
       res.json({ churchId: id, sermonId, video, ...result });
     } catch (e) {
       console.error("POST /admin/church/:id/process", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
+  // Process a direct audio URL (no feed) — e.g. a Wix-hosted sermon MP3.
+  // POST /admin/church/:id/audio  body/query: { audioUrl, title?, date? }
+  app.post("/admin/church/:id/audio", async (req, res) => {
+    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
+    const id = parseInt(req.params.id, 10);
+    const b = req.body || {};
+    const audioUrl = String(b.audioUrl || req.query.audioUrl || "").trim();
+    const title = String(b.title || req.query.title || "").trim();
+    const date = String(b.date || req.query.date || "").trim();
+    try {
+      const c = await pool.query(`SELECT * FROM churches WHERE id = $1`, [id]);
+      const church = c.rows[0];
+      if (!church) return res.status(404).json({ error: "church not found" });
+      if (!audioUrl) return res.status(400).json({ error: "audioUrl required" });
+      const result = await processAudioUrl(audioUrl, { title, date });
+      if (result.error) return res.status(502).json(result);
+      const sermonId = await saveSermon(id, result, {});
+      let video = null;
+      if (String(req.query.video || "1") !== "0") {
+        try {
+          const m = await matchVideoForSermon({ id: sermonId, title: result.title }, church);
+          if (m.ok) {
+            await pool.query(`UPDATE sermons SET video_id = $1 WHERE id = $2`, [m.best.id, sermonId]);
+            video = { videoId: m.best.id, matched: m.best.title, channel: m.best.channel, scoped: m.scoped, score: m.bestScore };
+          } else {
+            video = { videoId: null, reason: m.error ? `search failed: ${m.error}` : `no confident match (best ${m.bestScore})` };
+          }
+        } catch (e) { console.error("auto video match", e); }
+      }
+      res.json({ churchId: id, sermonId, video, ...result });
+    } catch (e) {
+      console.error("POST /admin/church/:id/audio", e);
       res.status(500).json({ error: String((e && e.message) || e) });
     }
   });
