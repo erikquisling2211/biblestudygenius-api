@@ -49,7 +49,7 @@ async function fetchViaProxyIfBlocked(url, opts = {}) {
 // low-bitrate 16kHz mono keeps even a long service under Whisper's 25MB limit
 function toWhisperAudio(input, output) {
   return new Promise((resolve, reject) => {
-    const p = spawn(ffmpegPath, ["-y", "-i", input, "-ac", "1", "-ar", "16000", "-b:a", "32k", output]);
+    const p = spawn(ffmpegPath, ["-y", "-i", input, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", output]);
     p.on("error", reject);
     p.on("close", (c) => (c === 0 ? resolve() : reject(new Error("ffmpeg exit " + c))));
   });
@@ -112,27 +112,28 @@ function decodeEntities(s) {
 export // Some podcast CDNs (e.g. Captivate) 404 unknown bot User-Agents, so present a browser UA.
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
-export async function latestEpisode(feedUrl) {
+export async function latestEpisode(feedUrl, index = 0) {
   const res = await fetchViaProxyIfBlocked(feedUrl, { headers: { "User-Agent": BROWSER_UA } });
   if (!res.ok) throw new Error("feed " + res.status);
   const xml = await res.text();
-  const item = xml.split(/<item[\s>]/)[1] || "";
+  // split() yields [preamble, item0, item1, ...]; index 0 = newest episode.
+  const item = xml.split(/<item[\s>]/)[index + 1] || "";
   const pick = (re) => (item.match(re) || [])[1];
   const clean = (s) => decodeEntities((s || "").replace(/<!\[CDATA\[|\]\]>/g, "").trim());
   return {
     title: clean(pick(/<title>([\s\S]*?)<\/title>/)),
     date: clean(pick(/<pubDate>([\s\S]*?)<\/pubDate>/)),
-    audio: pick(/<enclosure[^>]*url="([^"]+)"/),
+    audio: decodeEntities(pick(/<enclosure[^>]*url="([^"]+)"/)),
   };
 }
 
-// Reusable: fetch a feed's latest episode and return the full study-plan object.
-export async function processPodcastFeed(feed) {
+// Reusable: fetch a feed's episode (index 0 = newest) and return the full study-plan object.
+export async function processPodcastFeed(feed, index = 0) {
   const stamp = Date.now();
   const raw = path.join(os.tmpdir(), `sermon_${stamp}.mp3`);
   const small = path.join(os.tmpdir(), `sermon_${stamp}.m4a`);
   try {
-    const ep = await latestEpisode(feed);
+    const ep = await latestEpisode(feed, index);
     if (!ep.audio) return { error: "no audio enclosure in feed", episode: ep };
     await downloadTo(ep.audio, raw);
     await toWhisperAudio(raw, small);
@@ -149,13 +150,23 @@ export async function processPodcastFeed(feed) {
 // that block our server IP. python3 is already installed (for yt-dlp).
 const PY_DL = `
 import sys, urllib.request as u
+from urllib.parse import urlsplit
 url, dest = sys.argv[1], sys.argv[2]
 proxy = sys.argv[3] if len(sys.argv) > 3 else ""
-UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+# Podcast-app UA: hosts like Buzzsprout serve media to podcast apps but block browser/bot UAs.
+UA = "AppleCoreMedia/1.0.0 (iPhone; CPU OS 17_0 like Mac OS X)"
+_sp = urlsplit(url)
+REFERER = _sp.scheme + "://" + _sp.netloc + "/"
 def dl(opener):
-    req = u.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
+    req = u.Request(url, headers={"User-Agent": UA, "Accept": "*/*", "Referer": REFERER})
     with opener.open(req, timeout=180) as r:
-        return r.read()
+        ct = (r.headers.get("Content-Type") or "").lower()
+        data = r.read()
+    # Some hosts serve a 200-OK HTML anti-bot page to datacenter IPs; treat that as a failure
+    # so the caller retries through the residential proxy.
+    if ("html" in ct) or data[:1] == b"<" or len(data) < 2048:
+        raise Exception("non-audio response (ct=%s len=%d)" % (ct, len(data)))
+    return data
 data = None
 try:
     data = dl(u.build_opener())
