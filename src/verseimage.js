@@ -117,21 +117,15 @@ export function renderVerse({ text, ref, translation, red, bg }) {
   ctx.fillText(translation, W / 2, 460 + blockH / 2 + 132);
   ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
 
-  // --- Footer: brand + store links ---
+  // --- Footer: brand (kept clean; store links go in the share text, not the image) ---
   ctx.strokeStyle = "rgba(230,196,92,0.4)"; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(W / 2 - 120, H - 184); ctx.lineTo(W / 2 + 120, H - 184); ctx.stroke();
-
-  ctx.fillStyle = "rgba(237,199,86,0.95)";
+  ctx.beginPath(); ctx.moveTo(W / 2 - 120, H - 152); ctx.lineTo(W / 2 + 120, H - 152); ctx.stroke();
+  ctx.fillStyle = "rgba(230,196,92,0.92)";
   ctx.font = "27px VerseSerifB";
-  ctx.fillText("B I B L E   S T U D Y   G E N I U S", W / 2, H - 140);
-
-  ctx.fillStyle = "#eae6d6";
-  ctx.font = "26px VerseSerif";
-  ctx.fillText("Download free on Google Play & the App Store", W / 2, H - 100);
-
-  ctx.fillStyle = "#aeb6cc";
-  ctx.font = "22px VerseSerif";
-  ctx.fillText("play.google.com/store/apps/details?id=com.biblestudygenius.app", W / 2, H - 62);
+  ctx.fillText("B I B L E   S T U D Y   G E N I U S", W / 2, H - 108);
+  ctx.fillStyle = "#d7dbe8";
+  ctx.font = "italic 24px VerseSerif";
+  ctx.fillText("Free on iOS & Android", W / 2, H - 66);
 
   return canvas.toBuffer("image/png");
 }
