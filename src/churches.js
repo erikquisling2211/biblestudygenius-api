@@ -24,7 +24,6 @@ const CHURCH_JWT_SECRET = process.env.CHURCH_JWT_SECRET || process.env.ADMIN_TOK
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const SITE_URL = process.env.SITE_URL || "https://biblestudygenius.com";
 const API_BASE = process.env.PUBLIC_API_URL || "https://biblestudygenius-api-production.up.railway.app";
-const PODCAST_COVER = process.env.PODCAST_COVER_URL || `${SITE_URL}/assets/brand/podcast-cover.jpg`;
 const ASSETS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "assets");
 
 // Generic church-name words that don't identify a specific church (so they
@@ -424,7 +423,7 @@ async function buildChurchFeed(church) {
   const name = church.display_name || church.name;
   const selfUrl = `${API_BASE}/church/${church.id}/feed.xml`;
   const siteLink = `${SITE_URL}/church/${church.id}`;
-  const cover = church.logo_url || PODCAST_COVER;
+  const cover = church.logo_url || `${API_BASE}/cover.png?title=${encodeURIComponent(name)}`;
   const email = church.contact_email || "podcasts@biblestudygenius.com";
   const desc = `Weekly sermons from ${name}, with a daily Bible study plan for each message in the free Bible Study Genius app.`;
   const items = rows.map((r) => {

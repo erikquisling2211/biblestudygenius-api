@@ -130,6 +130,56 @@ export function renderVerse({ text, ref, translation, red, bg }) {
   return canvas.toBuffer("image/png");
 }
 
+// Podcast cover art (1400x1400) — church name over a sunrise photo. Apple/Spotify require
+// a square image 1400–3000px; this generates a branded one per church automatically.
+export function renderCover({ title, subtitle = "Sermons", bg }) {
+  const W = 1400, H = 1400;
+  const canvas = createCanvas(W, H);
+  const ctx = canvas.getContext("2d");
+
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, "#121828"); g.addColorStop(1, "#222c4e");
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+  if (bg) {
+    drawCover(ctx, bg, W, H);
+    const ov = ctx.createLinearGradient(0, 0, 0, H);
+    ov.addColorStop(0, "rgba(10,12,28,0.55)");
+    ov.addColorStop(0.55, "rgba(10,12,28,0.62)");
+    ov.addColorStop(1, "rgba(8,10,24,0.88)");
+    ctx.fillStyle = ov; ctx.fillRect(0, 0, W, H);
+  }
+
+  ctx.strokeStyle = "rgba(230,196,92,0.5)"; ctx.lineWidth = 5;
+  ctx.strokeRect(60, 60, W - 120, H - 120);
+
+  ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+  ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 18; ctx.shadowOffsetY = 3;
+  ctx.fillStyle = "#f7f2e2";
+  let size = 132, lines, lh;
+  const maxW = 1120, maxBlock = 640;
+  while (size >= 56) {
+    ctx.font = size + "px VerseSerifB";
+    lines = wrap(ctx, title, maxW);
+    lh = Math.round(size * 1.16);
+    if (lines.length * lh <= maxBlock) break;
+    size -= 4;
+  }
+  const blockH = lines.length * lh;
+  let y = 700 - blockH / 2 + lh * 0.76;
+  for (const ln of lines) { ctx.fillText(ln, W / 2, y); y += lh; }
+
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = "#edc756"; ctx.font = "54px VerseSerifB";
+  ctx.fillText(String(subtitle).toUpperCase().split("").join(" "), W / 2, 700 + blockH / 2 + 96);
+  ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+
+  ctx.fillStyle = "rgba(230,196,92,0.9)"; ctx.font = "34px VerseSerifB";
+  ctx.fillText("B I B L E   S T U D Y   G E N I U S", W / 2, H - 120);
+
+  return canvas.toBuffer("image/png");
+}
+
 export function mountVerseImage(app) {
   app.get("/verseimage", async (req, res) => {
     try {
@@ -154,6 +204,31 @@ export function mountVerseImage(app) {
       res.send(png);
     } catch (e) {
       console.error("GET /verseimage", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
+  // Podcast cover art: GET /cover.png?title=Church%20Name&sub=Sermons  -> 1400x1400 PNG
+  app.get("/cover.png", async (req, res) => {
+    try {
+      const title = String(req.query.title || "Sermons").slice(0, 80).trim() || "Sermons";
+      const subtitle = String(req.query.sub || "Sermons").slice(0, 40).trim() || "Sermons";
+      const bgs = await backgrounds();
+      let bgIdx = parseInt(req.query.bg, 10);
+      if (!Number.isFinite(bgIdx) || bgIdx < 0) {
+        // Stable background per church name, so a church's cover doesn't change between fetches.
+        let h = 0; for (const c of title) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+        bgIdx = h % BG_FILES.length;
+      }
+      bgIdx = bgIdx % BG_FILES.length;
+      const key = `cover|${bgIdx}|${subtitle}|${title}`;
+      let png = cacheGet(key);
+      if (!png) { png = renderCover({ title, subtitle, bg: bgs[bgIdx] || null }); cacheSet(key, png); }
+      res.set("Content-Type", "image/png");
+      res.set("Cache-Control", "public, max-age=86400");
+      res.send(png);
+    } catch (e) {
+      console.error("GET /cover.png", e);
       res.status(500).json({ error: String((e && e.message) || e) });
     }
   });
