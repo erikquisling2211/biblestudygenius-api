@@ -19,6 +19,7 @@ import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
 import Stripe from "stripe";
+import QRCode from "qrcode";
 
 const CHURCH_JWT_SECRET = process.env.CHURCH_JWT_SECRET || process.env.ADMIN_TOKEN || "bsg-church-dev-secret";
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
@@ -848,6 +849,21 @@ export function mountChurches(app) {
     }
   });
 
+  // QR code that points to a church's page — for bulletins, Sunday slides, etc.
+  app.get("/church/:id/qr.png", async (req, res) => {
+    if (!/^\d+$/.test(String(req.params.id))) return res.status(404).send("not found");
+    try {
+      const url = `${SITE_URL}/church/${parseInt(req.params.id, 10)}`;
+      const buf = await QRCode.toBuffer(url, { type: "png", width: 600, margin: 2, color: { dark: "#1b2340", light: "#ffffff" } });
+      res.set("Content-Type", "image/png");
+      res.set("Cache-Control", "public, max-age=86400");
+      res.send(buf);
+    } catch (e) {
+      console.error("GET /church/:id/qr.png", e);
+      res.status(500).send("error");
+    }
+  });
+
   // Per-church podcast RSS feed — submit this URL to Apple Podcasts & Spotify.
   app.get("/church/:id/feed.xml", async (req, res) => {
     if (!/^\d+$/.test(String(req.params.id))) return res.status(404).send("not found");
@@ -1007,6 +1023,32 @@ export function mountChurches(app) {
     if (!url) return res.status(400).json({ error: "url required" });
     try { res.json(await detectSermonSource(url)); }
     catch (e) { console.error("POST /church/me/detect", e); res.status(500).json({ error: String((e && e.message) || e) }); }
+  });
+
+  // Share kit: the church's link, QR, and ready-to-use announcement copy for reaching their congregation.
+  app.get("/church/me/share", churchAuth, async (req, res) => {
+    try {
+      const c = await pool.query(`SELECT id, name, display_name FROM churches WHERE id = $1`, [req.church.churchId]);
+      const church = c.rows[0];
+      if (!church) return res.status(404).json({ error: "not found" });
+      const name = church.display_name || church.name || "our church";
+      const id = church.id;
+      const shareUrl = `${SITE_URL}/church/${id}`;
+      const qrUrl = `${API_BASE}/church/${id}/qr.png`;
+      res.json({
+        shareUrl,
+        qrUrl,
+        announcements: {
+          pulpit: `We've put ${name} on Bible Study Genius — a free app that turns every sermon into a daily study plan for the whole week. Scan the code on the screen to follow us, and keep this week's message going all week.`,
+          bulletin: `📱 Follow ${name} on the free Bible Study Genius app — every sermon becomes a week of daily study, plus streaming and our own podcast. Follow us: ${shareUrl}`,
+          email: `${name} is now on Bible Study Genius, a free Bible app. Follow us there and each Sunday's sermon becomes a daily study plan you can walk through all week — with sermon streaming and our own podcast. Download the free app and follow us here: ${shareUrl}`,
+          text: `Follow ${name} on the free Bible Study Genius app and keep Sunday's sermon going all week: ${shareUrl}`,
+        },
+      });
+    } catch (e) {
+      console.error("GET /church/me/share", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
   });
 
   // Save the church's profile + confirmed sermon source, then process the first sermon so it goes live.
