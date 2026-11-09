@@ -11,7 +11,7 @@
  *   GET  /church/:id                   church detail + latest sermon (app)
  */
 import { pool } from "./db.js";
-import { processPodcastFeed, processYouTube, latestEpisode, searchYouTube, searchChannelVideos, processAudioUrl, scrapeWixSermons, detectSermonSource } from "./sermonprocess.js";
+import { processPodcastFeed, processYouTube, latestEpisode, searchYouTube, searchChannelVideos, processAudioUrl, scrapeWixSermons, detectSermonSource, detectGivingUrl, fetchIcsEvents } from "./sermonprocess.js";
 import cron from "node-cron";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -119,6 +119,9 @@ async function initChurches() {
   await pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;`);
   await pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS churches_stripe_cust_idx ON churches(stripe_customer_id);`);
+  // "Church app" extras: events calendar feed + a link to the church's existing giving page.
+  await pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS calendar_url TEXT;`);
+  await pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS giving_url TEXT;`);
   const miss = await pool.query(`SELECT id, sermon_date FROM sermons WHERE sermon_ts IS NULL`);
   for (const row of miss.rows) {
     const ts = (row.sermon_date && Date.parse(row.sermon_date)) || 0;
@@ -508,10 +511,10 @@ export function mountChurches(app) {
     if (!b.name) return res.status(400).json({ error: "name required" });
     try {
       const r = await pool.query(
-        `INSERT INTO churches (name,city,state,zip,lat,lon,denomination,website,feed_url,youtube_url,aliases,scrape_url,active,created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13) RETURNING *`,
+        `INSERT INTO churches (name,city,state,zip,lat,lon,denomination,website,feed_url,youtube_url,aliases,scrape_url,calendar_url,giving_url,active,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,true,$15) RETURNING *`,
         [b.name, b.city || null, b.state || null, b.zip || null, b.lat ?? null, b.lon ?? null,
-         b.denomination || null, b.website || null, b.feed_url || null, b.youtube_url || null, b.aliases || null, b.scrape_url || null, Date.now()]
+         b.denomination || null, b.website || null, b.feed_url || null, b.youtube_url || null, b.aliases || null, b.scrape_url || null, b.calendar_url || null, b.giving_url || null, Date.now()]
       );
       res.json(r.rows[0]);
     } catch (e) {
@@ -708,7 +711,7 @@ export function mountChurches(app) {
     if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
     const id = parseInt(req.params.id, 10);
     const b = { ...req.query, ...(req.body || {}) };
-    const allowed = ["name", "city", "state", "zip", "denomination", "website", "feed_url", "youtube_url", "aliases", "scrape_url"];
+    const allowed = ["name", "city", "state", "zip", "denomination", "website", "feed_url", "youtube_url", "aliases", "scrape_url", "calendar_url", "giving_url"];
     const sets = []; const vals = []; let i = 1;
     for (const k of allowed) {
       if (b[k] != null) { sets.push(`${k} = $${i++}`); vals.push(b[k]); }
@@ -864,6 +867,22 @@ export function mountChurches(app) {
     }
   });
 
+  // Upcoming events for a church, parsed from its Google Calendar / iCal feed.
+  app.get("/church/:id/events", async (req, res) => {
+    if (!/^\d+$/.test(String(req.params.id))) return res.status(404).json({ error: "not found" });
+    try {
+      const c = await pool.query(`SELECT calendar_url FROM churches WHERE id = $1 AND active`, [parseInt(req.params.id, 10)]);
+      if (!c.rows[0]) return res.status(404).json({ error: "church not found" });
+      if (!c.rows[0].calendar_url) return res.json({ count: 0, events: [] });
+      const r = await fetchIcsEvents(c.rows[0].calendar_url, { limit: 25 });
+      res.set("Cache-Control", "public, max-age=1800");
+      res.json(r.error ? { count: 0, events: [], error: r.error } : r);
+    } catch (e) {
+      console.error("GET /church/:id/events", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
   // Per-church podcast RSS feed — submit this URL to Apple Podcasts & Spotify.
   app.get("/church/:id/feed.xml", async (req, res) => {
     if (!/^\d+$/.test(String(req.params.id))) return res.status(404).send("not found");
@@ -885,7 +904,8 @@ export function mountChurches(app) {
     const id = parseInt(req.params.id, 10);
     try {
       const c = await pool.query(
-        `SELECT id,name,city,state,zip,denomination,website FROM churches WHERE id = $1 AND active`, [id]
+        `SELECT id,name,city,state,zip,denomination,website,giving_url AS "givingUrl",
+                (calendar_url IS NOT NULL) AS "hasEvents" FROM churches WHERE id = $1 AND active`, [id]
       );
       if (!c.rows[0]) return res.status(404).json({ error: "not found" });
       const sermons = await churchSermons(id, 50);
@@ -997,6 +1017,7 @@ export function mountChurches(app) {
     try {
       const c = await pool.query(
         `SELECT id, name, city, state, denomination, website, display_name AS "displayName", logo_url AS "logoUrl", brand_color AS "brandColor",
+                giving_url AS "givingUrl", calendar_url AS "calendarUrl",
                 (feed_url IS NOT NULL OR youtube_url IS NOT NULL OR scrape_url IS NOT NULL) AS configured
            FROM churches WHERE id = $1`,
         [req.church.churchId]
@@ -1021,8 +1042,13 @@ export function mountChurches(app) {
   app.post("/church/me/detect", churchAuth, async (req, res) => {
     const url = String((req.body && req.body.url) || "").trim();
     if (!url) return res.status(400).json({ error: "url required" });
-    try { res.json(await detectSermonSource(url)); }
-    catch (e) { console.error("POST /church/me/detect", e); res.status(500).json({ error: String((e && e.message) || e) }); }
+    try {
+      const [det, giving] = await Promise.all([
+        detectSermonSource(url),
+        detectGivingUrl(url).catch(() => ({ found: false })),
+      ]);
+      res.json({ ...det, giving: giving.found ? giving.givingUrl : null });
+    } catch (e) { console.error("POST /church/me/detect", e); res.status(500).json({ error: String((e && e.message) || e) }); }
   });
 
   // Share kit: the church's link, QR, and ready-to-use announcement copy for reaching their congregation.
@@ -1063,6 +1089,8 @@ export function mountChurches(app) {
       for (const k of ["name", "city", "state"]) {
         if (b[k] != null) { sets.push(`${k} = $${i++}`); vals.push(String(b[k])); }
       }
+      if (b.givingUrl != null) { sets.push(`giving_url = $${i++}`); vals.push(String(b.givingUrl).trim() || null); }
+      if (b.calendarUrl != null) { sets.push(`calendar_url = $${i++}`); vals.push(String(b.calendarUrl).trim() || null); }
       if (sourceType && sourceUrl) {
         sets.push(`feed_url = $${i++}`); vals.push(sourceType === "feed" ? sourceUrl : null);
         sets.push(`youtube_url = $${i++}`); vals.push(sourceType === "youtube" ? sourceUrl : null);

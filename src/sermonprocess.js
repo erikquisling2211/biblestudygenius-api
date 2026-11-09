@@ -300,6 +300,85 @@ export async function detectSermonSource(inputUrl) {
   return { found: false, reason: "no recognizable sermon source" };
 }
 
+/* ---------- church giving link (detected from their site) ---------- */
+// Scan a church's website for a "Give/Donate/Tithe" link or a known giving provider,
+// so the app can show a Give button that opens their existing giving page.
+export async function detectGivingUrl(pageUrl) {
+  const raw = String(pageUrl || "").trim();
+  if (!raw) return { found: false };
+  const norm = /^https?:\/\//i.test(raw) ? raw : "https://" + raw;
+  let html = "";
+  try { const res = await fetchViaProxyIfBlocked(norm, { headers: { "User-Agent": BROWSER_UA } }); if (res.ok) html = await res.text(); } catch { /* none */ }
+  if (!html) return { found: false };
+  // Known giving-provider URLs anywhere on the page.
+  const providers = /https?:\/\/[^"'<> ]*(?:tithe\.ly|pushpay\.com|givelify\.com|planningcenter(?:online)?\.com[^"'<> ]*giving|subsplash\.com[^"'<> ]*give|givebutter\.com|easytithe\.com|onrealm\.org|donorbox\.org|paypal\.com\/donate)[^"'<> ]*/i;
+  const pm = html.match(providers);
+  if (pm) return { found: true, givingUrl: pm[0].replace(/&amp;/g, "&") };
+  // A link whose text or href says give/donate/tithe/offering.
+  for (const a of (html.match(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi) || [])) {
+    const href = (a.match(/href=["']([^"']+)["']/i) || [])[1] || "";
+    const text = a.replace(/<[^>]+>/g, " ");
+    if (/\b(give|giving|donate|donation|tithe|offering)\b/i.test(text) || /\/(give|giving|donate|tithe|offering)(\b|\/)/i.test(href)) {
+      let u = href.replace(/&amp;/g, "&");
+      if (u.startsWith("/")) { try { u = new URL(norm).origin + u; } catch { /* keep */ } }
+      if (/^https?:\/\//i.test(u)) return { found: true, givingUrl: u };
+    }
+  }
+  return { found: false };
+}
+
+/* ---------- church events (Google Calendar / iCal feed) ---------- */
+const _ICS_DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const _ICS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function icalUnescape(s) {
+  return String(s || "").replace(/\\n/gi, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").replace(/\\\\/g, "\\").trim();
+}
+function parseIcalDate(line) {
+  const allDay = /VALUE=DATE(?!-TIME)/i.test(line);
+  const m = line.match(/:(\d{8})(?:T(\d{2})(\d{2})(\d{2}))?/);
+  if (!m) return null;
+  const Y = +m[1].slice(0, 4), Mo = +m[1].slice(4, 6), D = +m[1].slice(6, 8);
+  const H = m[2] ? +m[2] : 0, Mi = m[3] ? +m[3] : 0;
+  return { Y, Mo, D, H, Mi, allDay, startMs: Date.UTC(Y, Mo - 1, D, H, Mi) };
+}
+function fmtEventWhen(d) {
+  const dow = _ICS_DOW[new Date(Date.UTC(d.Y, d.Mo - 1, d.D)).getUTCDay()];
+  const base = `${dow}, ${_ICS_MON[d.Mo - 1]} ${d.D}`;
+  if (d.allDay) return base;
+  let h = d.H % 12; if (h === 0) h = 12;
+  return `${base} · ${h}:${String(d.Mi).padStart(2, "0")} ${d.H < 12 ? "AM" : "PM"}`;
+}
+// Fetch a church's public iCal feed and return upcoming events, soonest first.
+export async function fetchIcsEvents(icalUrl, { limit = 20 } = {}) {
+  let url = String(icalUrl || "").trim();
+  if (!url) return { error: "no calendar url" };
+  url = url.replace(/^webcal:/i, "https:");
+  const res = await fetchViaProxyIfBlocked(url, { headers: { "User-Agent": BROWSER_UA } });
+  if (!res.ok) return { error: "calendar " + res.status };
+  let text = await res.text();
+  text = text.replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, ""); // unfold continuation lines
+  const now = Date.now();
+  const prop = (body, name) => { const m = body.match(new RegExp("(?:^|\\n)" + name + "[^:\\n]*:([^\\n]*)", "i")); return m ? m[1] : ""; };
+  const events = [];
+  for (const block of text.split(/BEGIN:VEVENT/i).slice(1)) {
+    const body = block.split(/END:VEVENT/i)[0];
+    const ds = parseIcalDate((body.match(/(?:^|\n)(DTSTART[^\n]*)/i) || [])[1] || "");
+    if (!ds) continue;
+    const de = parseIcalDate((body.match(/(?:^|\n)(DTEND[^\n]*)/i) || [])[1] || "");
+    const endMs = de ? de.startMs : (ds.allDay ? ds.startMs + 86400000 : ds.startMs + 3600000);
+    if (endMs < now) continue; // skip past events
+    events.push({
+      title: icalUnescape(prop(body, "SUMMARY")) || "Event",
+      when: fmtEventWhen(ds),
+      startMs: ds.startMs,
+      allDay: ds.allDay,
+      location: icalUnescape(prop(body, "LOCATION")),
+    });
+  }
+  events.sort((a, b) => a.startMs - b.startMs);
+  return { count: events.length, events: events.slice(0, limit) };
+}
+
 // Captivate's CDN fingerprint-blocks Node's undici (404) but allows Python's urllib.
 // Download via a python3 subprocess: try direct first, fall back to the proxy for hosts
 // that block our server IP. python3 is already installed (for yt-dlp).
