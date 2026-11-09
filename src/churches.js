@@ -24,6 +24,9 @@ const CHURCH_JWT_SECRET = process.env.CHURCH_JWT_SECRET || process.env.ADMIN_TOK
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const SITE_URL = process.env.SITE_URL || "https://biblestudygenius.com";
 const API_BASE = process.env.PUBLIC_API_URL || "https://biblestudygenius-api-production.up.railway.app";
+// BSG centrally owns/manages church podcasts — all feeds use this owner email so Spotify's
+// verification codes land in one inbox we control.
+const PODCAST_OWNER_EMAIL = process.env.PODCAST_OWNER_EMAIL || "podcasts@biblestudygenius.com";
 const ASSETS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "assets");
 
 // Generic church-name words that don't identify a specific church (so they
@@ -271,10 +274,21 @@ async function processScrapedChurch(church, { index = null } = {}) {
 }
 
 // Best-effort welcome email via Resend (no-op if RESEND_API_KEY isn't set).
-async function sendWelcomeEmail(email, { churchName, tempPassword }) {
+// needsSetup=true (card-first signup): tell them to log in and connect their sermons.
+// needsSetup=false (detect-first): their church is already live.
+async function sendWelcomeEmail(email, { churchName, tempPassword, needsSetup = false }) {
   if (!process.env.RESEND_API_KEY || !email) return false;
   const from = process.env.RESEND_FROM || "Bible Study Genius <hello@biblestudygenius.com>";
-  const body = `Welcome to Bible Study Genius!
+  const setupBody = `Welcome to Bible Study Genius!
+
+Your subscription is active and your 14-day free trial has started. Log in to your dashboard to finish setting up your church and connect your sermons:
+
+  ${SITE_URL}/dashboard
+  Email: ${email}
+  Temporary password: ${tempPassword}
+
+Add your sermon link (website, podcast, or YouTube) and we take it from there — study plans, podcast, and in-app audio, automatically. Please change your password after signing in. Reply with any questions.`;
+  const liveBody = `Welcome to Bible Study Genius!
 
 ${churchName} is live. Your sermons are already being turned into weekly study plans in the app.
 
@@ -284,14 +298,38 @@ Your dashboard login:
   Temporary password: ${tempPassword}
 
 Please sign in and change your password. Reply to this email with any questions.`;
+  const subject = needsSetup ? "Finish setting up your church on Bible Study Genius" : `${churchName} is live on Bible Study Genius`;
   try {
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: [email], subject: `${churchName} is live on Bible Study Genius`, text: body }),
+      body: JSON.stringify({ from, to: [email], subject, text: needsSetup ? setupBody : liveBody }),
     });
     return res.ok;
   } catch (e) { console.error("sendWelcomeEmail", (e && e.message) || e); return false; }
+}
+
+// Process a church's first sermon from whichever source is set on its row (feed / scrape / youtube),
+// attaching a matching YouTube video where possible. Shared by onboarding and dashboard setup.
+async function processFirstSermon(church) {
+  try {
+    if (church.scrape_url) return await processScrapedChurch(church, { index: 0 });
+    if (church.feed_url) {
+      const r = await processPodcastFeed(church.feed_url);
+      if (r.error) return { error: r.error };
+      const sid = await saveSermon(church.id, r, {});
+      let videoId = null;
+      try { const m = await matchVideoForSermon({ id: sid, title: r.title }, church); if (m.ok) { await pool.query(`UPDATE sermons SET video_id=$1 WHERE id=$2`, [m.best.id, sid]); videoId = m.best.id; } } catch {}
+      return { sermonId: sid, title: r.title, videoId };
+    }
+    if (church.youtube_url) {
+      const r = await processYouTube(church.youtube_url);
+      if (r.error) return { error: r.error };
+      const sid = await saveSermon(church.id, r, { videoId: r.videoId || null, startSec: r.sermonStartSec, endSec: r.sermonEndSec, audioUrl: r.audioUrl || null });
+      return { sermonId: sid, title: r.title, videoId: r.videoId || null };
+    }
+    return { error: "no source set" };
+  } catch (e) { console.error(`processFirstSermon (church ${church.id}):`, (e && e.message) || e); return { error: String((e && e.message) || e) }; }
 }
 
 // Create a paid church end-to-end: insert the row (active), wire its detected source,
@@ -309,21 +347,13 @@ async function onboardChurch({ name, city, state, email, sourceType, sourceUrl, 
   );
   const church = ins.rows[0];
 
-  // Process the first sermon now, so the church sees content the moment they log in.
-  try {
-    if (sourceType === "feed") {
-      const r = await processPodcastFeed(feedUrl);
-      if (!r.error) {
-        const sid = await saveSermon(church.id, r, {});
-        try { const m = await matchVideoForSermon({ id: sid, title: r.title }, church); if (m.ok) await pool.query(`UPDATE sermons SET video_id=$1 WHERE id=$2`, [m.best.id, sid]); } catch {}
-      }
-    } else if (sourceType === "scrape") {
-      await processScrapedChurch(church, { index: 0 });
-    } else if (sourceType === "youtube") {
-      const r = await processYouTube(youtubeUrl);
-      if (!r.error) await saveSermon(church.id, r, { videoId: r.videoId || null, startSec: r.sermonStartSec, endSec: r.sermonEndSec, audioUrl: r.audioUrl || null });
-    }
-  } catch (e) { console.error(`onboard first sermon (church ${church.id}):`, (e && e.message) || e); }
+  // If a source was detected at signup (detect-first flow), process the first sermon now so
+  // content is live immediately. Card-first signups have no source yet — they connect it in the dashboard.
+  const needsSetup = !sourceType;
+  if (sourceType) {
+    try { await processFirstSermon(church); }
+    catch (e) { console.error(`onboard first sermon (church ${church.id}):`, (e && e.message) || e); }
+  }
 
   // Provision a dashboard login with a temporary password.
   let tempPassword = null;
@@ -335,9 +365,9 @@ async function onboardChurch({ name, city, state, email, sourceType, sourceUrl, 
        ON CONFLICT (email) DO UPDATE SET church_id=EXCLUDED.church_id, password_hash=EXCLUDED.password_hash`,
       [church.id, String(email).toLowerCase(), hash, Date.now()]
     );
-    await sendWelcomeEmail(email, { churchName: church.name, tempPassword });
+    await sendWelcomeEmail(email, { churchName: church.name, tempPassword, needsSetup });
   }
-  console.log(`🎉 Onboarded church ${church.id} (${church.name}) via ${sourceType}${tempPassword ? "" : " — no login (no email)"}`);
+  console.log(`🎉 Onboarded church ${church.id} (${church.name})${sourceType ? " via " + sourceType : " (card-first, awaiting setup)"}${tempPassword ? "" : " — no login (no email)"}`);
   return { churchId: church.id, tempPassword };
 }
 
@@ -424,7 +454,7 @@ async function buildChurchFeed(church) {
   const selfUrl = `${API_BASE}/church/${church.id}/feed.xml`;
   const siteLink = `${SITE_URL}/church/${church.id}`;
   const cover = church.logo_url || `${API_BASE}/cover.png?title=${encodeURIComponent(name)}`;
-  const email = church.contact_email || "podcasts@biblestudygenius.com";
+  const email = PODCAST_OWNER_EMAIL;
   const desc = `Weekly sermons from ${name}, with a daily Bible study plan for each message in the free Bible Study Genius app.`;
   const items = rows.map((r) => {
     const dur = (r.sermon_end_sec != null && r.sermon_start_sec != null) ? (r.sermon_end_sec - r.sermon_start_sec) : null;
@@ -777,8 +807,11 @@ export function mountChurches(app) {
           const dupe = await pool.query(`SELECT id FROM churches WHERE stripe_customer_id = $1 LIMIT 1`, [session.customer]);
           if (!dupe.rows.length) {
             const md = session.metadata || {};
+            // Detect-first: metadata carries name + detected source. Card-first (Payment Link):
+            // no metadata, so pull the email Stripe collected and create a bare church to set up in the dashboard.
+            const email = (session.customer_details && session.customer_details.email) || session.customer_email || md.email || "";
             await onboardChurch({
-              name: md.name, city: md.city, state: md.state, email: md.email,
+              name: md.name, city: md.city, state: md.state, email,
               sourceType: md.sourceType, sourceUrl: md.sourceUrl,
               stripeCustomerId: session.customer, stripeSubscriptionId: session.subscription,
             });
@@ -947,11 +980,14 @@ export function mountChurches(app) {
   app.get("/church/me", churchAuth, async (req, res) => {
     try {
       const c = await pool.query(
-        `SELECT id, name, city, state, denomination, website, display_name AS "displayName", logo_url AS "logoUrl", brand_color AS "brandColor" FROM churches WHERE id = $1`,
+        `SELECT id, name, city, state, denomination, website, display_name AS "displayName", logo_url AS "logoUrl", brand_color AS "brandColor",
+                (feed_url IS NOT NULL OR youtube_url IS NOT NULL OR scrape_url IS NOT NULL) AS configured
+           FROM churches WHERE id = $1`,
         [req.church.churchId]
       );
       if (!c.rows[0]) return res.status(404).json({ error: "not found" });
-      res.json({ church: c.rows[0] });
+      const row = c.rows[0];
+      res.json({ church: row, needsSetup: !row.configured });
     } catch (e) {
       res.status(500).json({ error: String((e && e.message) || e) });
     }
@@ -961,5 +997,45 @@ export function mountChurches(app) {
   app.get("/church/me/stats", churchAuth, async (req, res) => {
     try { res.json(await churchStats(req.church.churchId)); }
     catch (e) { console.error("GET /church/me/stats", e); res.status(500).json({ error: String((e && e.message) || e) }); }
+  });
+
+  // --- Dashboard onboarding (church sets up its own sermons after a card-first signup) ---
+
+  // Preview: church pastes their website/podcast/YouTube URL → we detect their sermons (no save).
+  app.post("/church/me/detect", churchAuth, async (req, res) => {
+    const url = String((req.body && req.body.url) || "").trim();
+    if (!url) return res.status(400).json({ error: "url required" });
+    try { res.json(await detectSermonSource(url)); }
+    catch (e) { console.error("POST /church/me/detect", e); res.status(500).json({ error: String((e && e.message) || e) }); }
+  });
+
+  // Save the church's profile + confirmed sermon source, then process the first sermon so it goes live.
+  // Body: { name?, city?, state?, sourceType, sourceUrl }  (sourceType: feed|youtube|scrape, from /detect)
+  app.post("/church/me/setup", churchAuth, async (req, res) => {
+    const id = req.church.churchId;
+    const b = req.body || {};
+    const sourceType = String(b.sourceType || "").trim();
+    const sourceUrl = String(b.sourceUrl || "").trim();
+    try {
+      const sets = []; const vals = []; let i = 1;
+      for (const k of ["name", "city", "state"]) {
+        if (b[k] != null) { sets.push(`${k} = $${i++}`); vals.push(String(b[k])); }
+      }
+      if (sourceType && sourceUrl) {
+        sets.push(`feed_url = $${i++}`); vals.push(sourceType === "feed" ? sourceUrl : null);
+        sets.push(`youtube_url = $${i++}`); vals.push(sourceType === "youtube" ? sourceUrl : null);
+        sets.push(`scrape_url = $${i++}`); vals.push(sourceType === "scrape" ? sourceUrl : null);
+      }
+      if (sets.length) { vals.push(id); await pool.query(`UPDATE churches SET ${sets.join(", ")} WHERE id = $${i}`, vals); }
+
+      const c = await pool.query(`SELECT * FROM churches WHERE id = $1`, [id]);
+      const church = c.rows[0];
+      let processed = null;
+      if (sourceType && sourceUrl) processed = await processFirstSermon(church);
+      res.json({ ok: true, churchId: id, sourceType: sourceType || null, processed });
+    } catch (e) {
+      console.error("POST /church/me/setup", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
   });
 }
