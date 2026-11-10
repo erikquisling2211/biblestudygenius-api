@@ -501,7 +501,7 @@ async function downloadYouTubeAudio(vid, base) {
     noWarnings: true,
     // Impersonate the TV / Safari / iOS players, and send the residential proxy + account
     // cookies (when configured) so YouTube's "confirm you're not a bot" wall is cleared.
-    extractorArgs: "youtube:player_client=tv,web_safari,ios",
+    extractorArgs: "youtube:player_client=mweb,web_safari,tv",
     ...ytAuthOpts(),
     addHeader: ["referer:youtube.com", "user-agent:Mozilla/5.0"],
   });
@@ -518,7 +518,7 @@ export async function searchYouTube(query, n = 6) {
       dumpSingleJson: true,
       noCheckCertificates: true,
       noWarnings: true,
-      extractorArgs: "youtube:player_client=tv,web_safari,ios",
+      extractorArgs: "youtube:player_client=mweb,web_safari,tv",
       ...ytAuthOpts(),
       addHeader: ["referer:youtube.com", "user-agent:Mozilla/5.0"],
     });
@@ -560,7 +560,7 @@ export async function searchChannelVideos(ref, n = 15) {
       playlistEnd: n,
       noCheckCertificates: true,
       noWarnings: true,
-      extractorArgs: "youtube:player_client=tv,web_safari,ios",
+      extractorArgs: "youtube:player_client=mweb,web_safari,tv",
       ...ytAuthOpts(),
       addHeader: ["referer:youtube.com", "user-agent:Mozilla/5.0"],
     });
