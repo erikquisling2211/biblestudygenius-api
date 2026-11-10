@@ -759,10 +759,14 @@ export function mountChurches(app) {
     if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
     const id = parseInt(req.params.id, 10);
     const b = { ...req.query, ...(req.body || {}) };
-    const allowed = ["name", "city", "state", "zip", "denomination", "website", "feed_url", "youtube_url", "aliases", "scrape_url", "calendar_url", "giving_url"];
+    const allowed = ["name", "city", "state", "zip", "denomination", "website", "feed_url", "youtube_url", "aliases", "scrape_url", "calendar_url", "giving_url", "active"];
     const sets = []; const vals = []; let i = 1;
     for (const k of allowed) {
-      if (b[k] != null) { sets.push(`${k} = $${i++}`); vals.push(b[k]); }
+      if (b[k] != null) {
+        let v = b[k];
+        if (k === "active") v = !(v === false || v === "false" || v === "0" || v === 0);
+        sets.push(`${k} = $${i++}`); vals.push(v);
+      }
     }
     if (!sets.length) return res.status(400).json({ error: "no fields to update" });
     vals.push(id);
