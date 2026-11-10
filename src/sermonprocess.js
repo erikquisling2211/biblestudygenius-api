@@ -433,8 +433,38 @@ function videoId(url) {
   if (m) return m[1];
   return /^[A-Za-z0-9_-]{11}$/.test(url) ? url : null;
 }
+// YouTube changes its anti-bot challenge often, and the yt-dlp that ships inside
+// youtube-dl-exec goes stale ("ERROR: [youtube] <id>: The page needs to be reloaded.").
+// Fetch the latest self-contained yt-dlp binary once per container and run that instead;
+// fall back to the bundled binary if the download is unavailable. This self-heals on redeploy.
+let _ytdlpPromise = null;
+async function ytdlp() {
+  if (_ytdlpPromise) return _ytdlpPromise;
+  _ytdlpPromise = (async () => {
+    const mod = await import("youtube-dl-exec");
+    try {
+      const binPath = path.join(os.tmpdir(), "yt-dlp_linux");
+      let have = false;
+      try { await fs.access(binPath); have = true; } catch { /* needs download */ }
+      if (!have) {
+        const url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
+        const res = await undiciFetch(url, { redirect: "follow" });
+        if (!res.ok) throw new Error(`download HTTP ${res.status}`);
+        await fs.writeFile(binPath, Buffer.from(await res.arrayBuffer()));
+        await fs.chmod(binPath, 0o755);
+        console.log("✅ yt-dlp: downloaded latest self-contained binary");
+      }
+      return mod.create(binPath);
+    } catch (e) {
+      console.error("yt-dlp self-update failed, using bundled binary:", (e && e.message) || e);
+      return mod.default;
+    }
+  })();
+  return _ytdlpPromise;
+}
+
 async function downloadYouTubeAudio(vid, base) {
-  const youtubedl = (await import("youtube-dl-exec")).default; // lazy: only needed for the YouTube path
+  const youtubedl = await ytdlp(); // latest self-contained yt-dlp (falls back to bundled)
   await youtubedl(`https://www.youtube.com/watch?v=${vid}`, {
     extractAudio: true,
     audioFormat: "mp3",
@@ -453,7 +483,7 @@ async function downloadYouTubeAudio(vid, base) {
 // Search YouTube for candidate videos (flat metadata only; no download).
 // Reuses the same proxy + player-client impersonation as the audio path.
 export async function searchYouTube(query, n = 6) {
-  const youtubedl = (await import("youtube-dl-exec")).default;
+  const youtubedl = await ytdlp();
   let out;
   try {
     out = await youtubedl(`ytsearch${n}:${query}`, {
@@ -494,7 +524,7 @@ function channelUrl(ref) {
 export async function searchChannelVideos(ref, n = 15) {
   const url = channelUrl(ref);
   if (!url) return { error: "no channel", entries: [] };
-  const youtubedl = (await import("youtube-dl-exec")).default;
+  const youtubedl = await ytdlp();
   let out;
   try {
     out = await youtubedl(url, {
