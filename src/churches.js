@@ -716,12 +716,12 @@ export function mountChurches(app) {
     const b = { ...req.query, ...(req.body || {}) };
     const sets = []; const vals = []; let i = 1;
     if (b.title != null) { sets.push(`title = $${i++}`); vals.push(String(b.title)); }
-    if (b.date != null) { sets.push(`date = $${i++}`); vals.push(String(b.date)); }
+    if (b.date != null) { sets.push(`sermon_date = $${i++}`); vals.push(String(b.date)); }
     if (!sets.length) return res.status(400).json({ error: "no fields to update (title, date)" });
     vals.push(id);
     try {
       const r = await pool.query(
-        `UPDATE sermons SET ${sets.join(", ")} WHERE id = $${i} RETURNING id, title, date`, vals
+        `UPDATE sermons SET ${sets.join(", ")} WHERE id = $${i} RETURNING id, title, sermon_date AS date`, vals
       );
       if (!r.rows[0]) return res.status(404).json({ error: "not found" });
       res.json(r.rows[0]);
