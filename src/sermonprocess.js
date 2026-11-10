@@ -250,12 +250,14 @@ export async function detectSermonSource(inputUrl) {
     } catch { /* fall through */ }
   }
 
-  // 2) Direct podcast RSS.
-  if (/\.(rss|xml)(\?|$)|\/feed\b|feeds?\./i.test(norm)) {
+  // 2) Direct podcast RSS. Try the URL as a feed regardless of its shape — feed hosts use
+  // many URL forms (anchor.fm/.../rss, sermon.net/rss, logos .../feed, subsplash podcast.rss,
+  // planningcenter podcast_feeds). If it parses to an episode with audio, it's a feed.
+  if (!/^https?:\/\/[^/]*\.?youtube\.com|youtu\.be/i.test(norm)) {
     try {
       const ep = await latestEpisode(norm, 0);
       if (ep && ep.audio) return { found: true, sourceType: "feed", sourceUrl: norm, sampleSermons: [{ title: ep.title, date: ep.date }] };
-    } catch { /* fall through */ }
+    } catch { /* not a feed — fall through to HTML sniffing */ }
   }
 
   // 3) Fetch the page and sniff its platform.
