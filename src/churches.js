@@ -635,15 +635,23 @@ export function mountChurches(app) {
     const id = parseInt(req.params.id, 10);
     const url = String(req.query.url || (req.body && req.body.url) || "");
     if (!url) return res.status(400).json({ error: "missing url param" });
+    let church;
     try {
       const c = await pool.query(`SELECT id, feed_url FROM churches WHERE id = $1`, [id]);
-      if (!c.rows[0]) return res.status(404).json({ error: "church not found" });
+      church = c.rows[0];
+      if (!church) return res.status(404).json({ error: "church not found" });
+    } catch (e) {
+      console.error("POST /admin/church/:id/youtube (lookup)", e);
+      return res.status(500).json({ error: String((e && e.message) || e) });
+    }
+    // Download + transcribe + plan can run several minutes — longer than the HTTP edge will hold
+    // the connection. Do the work off the request and return right away; the sermon appears when done.
+    const work = async () => {
       const result = await processYouTube(url);
-      if (result.error) return res.status(502).json(result);
-      // If the church also has a podcast feed, attach its latest downloadable MP3 for offline play.
+      if (result.error) { console.error(`youtube process (church ${id}): ${result.error}`); throw new Error(result.error); }
       let audioUrl = null;
-      if (c.rows[0].feed_url) {
-        try { const ep = await latestEpisode(c.rows[0].feed_url); audioUrl = ep.audio || null; } catch (e) { console.error("feed audio attach", e); }
+      if (church.feed_url) {
+        try { const ep = await latestEpisode(church.feed_url); audioUrl = ep.audio || null; } catch (e) { console.error("feed audio attach", e); }
       }
       const sermonId = await saveSermon(id, result, {
         videoId: result.videoId || null,
@@ -651,11 +659,20 @@ export function mountChurches(app) {
         endSec: result.sermonEndSec,
         audioUrl: audioUrl || result.audioUrl || null, // feed audio preferred; else R2-hosted sermon audio
       });
-      res.json({ churchId: id, sermonId, ...result });
-    } catch (e) {
-      console.error("POST /admin/church/:id/youtube", e);
-      res.status(500).json({ error: String((e && e.message) || e) });
+      console.log(`✅ youtube sermon saved: church ${id} sermon ${sermonId} — "${result.title}"`);
+      return { sermonId, result };
+    };
+    // ?sync=1 keeps the old blocking behavior (handy for short clips / debugging).
+    if (String(req.query.sync || "") === "1") {
+      try {
+        const { sermonId, result } = await work();
+        return res.json({ churchId: id, sermonId, ...result });
+      } catch (e) {
+        return res.status(502).json({ error: String((e && e.message) || e) });
+      }
     }
+    work().catch((e) => console.error(`POST /admin/church/${id}/youtube (background)`, (e && e.message) || e));
+    res.json({ churchId: id, status: "processing", message: "Transcribing in the background — the sermon will appear on the church in a few minutes." });
   });
 
   // Set a sermon's video embed bounds (and/or videoId) without re-running transcription.
