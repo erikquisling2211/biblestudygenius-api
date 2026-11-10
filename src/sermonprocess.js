@@ -457,6 +457,41 @@ async function setupYtCookies() {
     console.error("yt-dlp cookies setup failed:", (e && e.message) || e);
   }
 }
+// YouTube now binds a GVS PO Token to most clients; yt-dlp can mint that token itself, but only
+// if it has a JavaScript runtime to run its bundled challenge solver (yt_dlp_ejs). Railway's image
+// has none that yt-dlp accepts, so download a standalone Deno once per container and put it on PATH.
+// Verified fix: with Deno present, yt-dlp reports "Solving JS challenges using deno" and extracts.
+async function setupDeno() {
+  try {
+    const denoDir = path.join(os.tmpdir(), "deno-bin");
+    const denoBin = path.join(denoDir, "deno");
+    let have = false;
+    try { await fs.access(denoBin); have = true; } catch { /* needs download */ }
+    if (!have) {
+      await fs.mkdir(denoDir, { recursive: true });
+      const zipPath = path.join(denoDir, "deno.zip");
+      const url = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip";
+      const res = await undiciFetch(url, { redirect: "follow" });
+      if (!res.ok) throw new Error(`deno download HTTP ${res.status}`);
+      await fs.writeFile(zipPath, Buffer.from(await res.arrayBuffer()));
+      // Node has no built-in zip extractor; python3 is already present (for yt-dlp).
+      await new Promise((resolve, reject) => {
+        const p = spawn("python3", ["-c", "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])", zipPath, denoDir]);
+        let err = ""; p.stderr.on("data", (d) => (err += d));
+        p.on("error", reject);
+        p.on("close", (c) => (c === 0 ? resolve() : reject(new Error("deno unzip failed: " + err.trim()))));
+      });
+      await fs.chmod(denoBin, 0o755);
+      await fs.unlink(zipPath).catch(() => {});
+      console.log("✅ deno: downloaded for yt-dlp JS challenge solving");
+    }
+    if (!(process.env.PATH || "").split(":").includes(denoDir)) {
+      process.env.PATH = denoDir + ":" + (process.env.PATH || "");
+    }
+  } catch (e) {
+    console.error("deno setup failed (YouTube extraction may fail):", (e && e.message) || e);
+  }
+}
 // Extra yt-dlp options shared by every YouTube call: residential proxy + cookies when present.
 function ytAuthOpts() {
   return {
@@ -469,6 +504,7 @@ async function ytdlp() {
   _ytdlpPromise = (async () => {
     const mod = await import("youtube-dl-exec");
     await setupYtCookies();
+    await setupDeno();
     try {
       const binPath = path.join(os.tmpdir(), "yt-dlp_linux");
       let have = false;
@@ -501,7 +537,7 @@ async function downloadYouTubeAudio(vid, base) {
     noWarnings: true,
     // Impersonate the TV / Safari / iOS players, and send the residential proxy + account
     // cookies (when configured) so YouTube's "confirm you're not a bot" wall is cleared.
-    extractorArgs: "youtube:player_client=mweb,web_safari,tv",
+    extractorArgs: "youtube:player_client=default",
     ...ytAuthOpts(),
     addHeader: ["referer:youtube.com", "user-agent:Mozilla/5.0"],
   });
@@ -518,7 +554,7 @@ export async function searchYouTube(query, n = 6) {
       dumpSingleJson: true,
       noCheckCertificates: true,
       noWarnings: true,
-      extractorArgs: "youtube:player_client=mweb,web_safari,tv",
+      extractorArgs: "youtube:player_client=default",
       ...ytAuthOpts(),
       addHeader: ["referer:youtube.com", "user-agent:Mozilla/5.0"],
     });
@@ -560,7 +596,7 @@ export async function searchChannelVideos(ref, n = 15) {
       playlistEnd: n,
       noCheckCertificates: true,
       noWarnings: true,
-      extractorArgs: "youtube:player_client=mweb,web_safari,tv",
+      extractorArgs: "youtube:player_client=default",
       ...ytAuthOpts(),
       addHeader: ["referer:youtube.com", "user-agent:Mozilla/5.0"],
     });
