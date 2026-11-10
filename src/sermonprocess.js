@@ -438,10 +438,37 @@ function videoId(url) {
 // Fetch the latest self-contained yt-dlp binary once per container and run that instead;
 // fall back to the bundled binary if the download is unavailable. This self-heals on redeploy.
 let _ytdlpPromise = null;
+let _ytCookiesPath = null; // set by ytdlp() init if YT cookies are provided via env
+// Write a YouTube cookies file from env so yt-dlp can clear the "Sign in to confirm you're
+// not a bot" wall on datacenter IPs. Provide YT_COOKIES_B64 (base64 of a Netscape cookies.txt
+// exported from a logged-in — ideally throwaway — YouTube account); refresh it when it expires.
+async function setupYtCookies() {
+  try {
+    const raw = process.env.YT_COOKIES_B64
+      ? Buffer.from(process.env.YT_COOKIES_B64, "base64").toString("utf8")
+      : (process.env.YT_COOKIES || "");
+    if (raw && /youtube\.com/i.test(raw)) {
+      const cp = path.join(os.tmpdir(), "yt-cookies.txt");
+      await fs.writeFile(cp, raw);
+      _ytCookiesPath = cp;
+      console.log("✅ yt-dlp: using YouTube cookies from env");
+    }
+  } catch (e) {
+    console.error("yt-dlp cookies setup failed:", (e && e.message) || e);
+  }
+}
+// Extra yt-dlp options shared by every YouTube call: residential proxy + cookies when present.
+function ytAuthOpts() {
+  return {
+    ...(PROXY_URL ? { proxy: PROXY_URL } : {}),
+    ...(_ytCookiesPath ? { cookies: _ytCookiesPath } : {}),
+  };
+}
 async function ytdlp() {
   if (_ytdlpPromise) return _ytdlpPromise;
   _ytdlpPromise = (async () => {
     const mod = await import("youtube-dl-exec");
+    await setupYtCookies();
     try {
       const binPath = path.join(os.tmpdir(), "yt-dlp_linux");
       let have = false;
@@ -472,10 +499,10 @@ async function downloadYouTubeAudio(vid, base) {
     ffmpegLocation: ffmpegPath,
     noCheckCertificates: true,
     noWarnings: true,
-    // Impersonate the TV / Safari / iOS players — these often bypass YouTube's
-    // "confirm you're not a bot" challenge on datacenter IPs (no cookies needed).
+    // Impersonate the TV / Safari / iOS players, and send the residential proxy + account
+    // cookies (when configured) so YouTube's "confirm you're not a bot" wall is cleared.
     extractorArgs: "youtube:player_client=tv,web_safari,ios",
-    ...(PROXY_URL ? { proxy: PROXY_URL } : {}),
+    ...ytAuthOpts(),
     addHeader: ["referer:youtube.com", "user-agent:Mozilla/5.0"],
   });
   return `${base}.mp3`;
@@ -492,7 +519,7 @@ export async function searchYouTube(query, n = 6) {
       noCheckCertificates: true,
       noWarnings: true,
       extractorArgs: "youtube:player_client=tv,web_safari,ios",
-      ...(PROXY_URL ? { proxy: PROXY_URL } : {}),
+      ...ytAuthOpts(),
       addHeader: ["referer:youtube.com", "user-agent:Mozilla/5.0"],
     });
   } catch (e) {
@@ -534,7 +561,7 @@ export async function searchChannelVideos(ref, n = 15) {
       noCheckCertificates: true,
       noWarnings: true,
       extractorArgs: "youtube:player_client=tv,web_safari,ios",
-      ...(PROXY_URL ? { proxy: PROXY_URL } : {}),
+      ...ytAuthOpts(),
       addHeader: ["referer:youtube.com", "user-agent:Mozilla/5.0"],
     });
   } catch (e) {
