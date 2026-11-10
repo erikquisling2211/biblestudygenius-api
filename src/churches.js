@@ -327,7 +327,16 @@ async function processFirstSermon(church) {
       return { sermonId: sid, title: r.title, videoId };
     }
     if (church.youtube_url) {
-      const r = await processYouTube(church.youtube_url);
+      // youtube_url may be a channel/handle (from auto-detect) rather than a single video —
+      // processYouTube needs a watchable video, so resolve the channel's latest upload first.
+      let videoUrl = church.youtube_url;
+      const isVideo = /(?:[?&]v=|youtu\.be\/|\/embed\/|\/live\/|\/shorts\/)[A-Za-z0-9_-]{11}/.test(videoUrl);
+      if (!isVideo) {
+        const vids = await searchChannelVideos(church.youtube_url, 5);
+        if (!vids || vids.error || !(vids.entries && vids.entries.length)) return { error: (vids && vids.error) || "no videos found on channel" };
+        videoUrl = `https://www.youtube.com/watch?v=${vids.entries[0].id}`;
+      }
+      const r = await processYouTube(videoUrl);
       if (r.error) return { error: r.error };
       const sid = await saveSermon(church.id, r, { videoId: r.videoId || null, startSec: r.sermonStartSec, endSec: r.sermonEndSec, audioUrl: r.audioUrl || null });
       return { sermonId: sid, title: r.title, videoId: r.videoId || null };
@@ -781,6 +790,45 @@ export function mountChurches(app) {
     if (!url) return res.status(400).json({ error: "url required" });
     try { res.json(await detectSermonSource(url)); }
     catch (e) { console.error("POST /detect", e); res.status(500).json({ error: String((e && e.message) || e) }); }
+  });
+
+  // One-call admin onboarding (for batch imports): detect source from a URL, create the church,
+  // and process its latest sermon in the background. Returns immediately with the detected source.
+  // Body: { name, url, city?, state? }. If no source is found, nothing is created (returns found:false).
+  app.post("/admin/onboard", async (req, res) => {
+    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
+    const b = req.body || {};
+    const name = String(b.name || "").trim();
+    const url = String(b.url || b.website || "").trim();
+    if (!name || !url) return res.status(400).json({ error: "name and url required" });
+    let det;
+    try { det = await detectSermonSource(url); }
+    catch (e) { return res.status(502).json({ error: "detect failed: " + String((e && e.message) || e) }); }
+    if (!det || !det.found) return res.json({ found: false, name, url, message: "no sermon source detected" });
+    let church;
+    try {
+      const ins = await pool.query(
+        `INSERT INTO churches (name,city,state,website,feed_url,youtube_url,scrape_url,active,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8) RETURNING *`,
+        [name, b.city || null, b.state || null, url,
+         det.sourceType === "feed" ? det.sourceUrl : null,
+         det.sourceType === "youtube" ? det.sourceUrl : null,
+         det.sourceType === "scrape" ? det.sourceUrl : null,
+         Date.now()]
+      );
+      church = ins.rows[0];
+    } catch (e) {
+      console.error("POST /admin/onboard insert", e);
+      return res.status(500).json({ error: String((e && e.message) || e) });
+    }
+    // Download + transcribe can take minutes — do it off the request.
+    processFirstSermon(church)
+      .then((r) => {
+        if (r && r.error) console.error(`onboard process (church ${church.id} "${name}"): ${r.error}`);
+        else console.log(`✅ onboarded church ${church.id} "${name}" via ${det.sourceType} — sermon ${r && r.sermonId} "${r && r.title}"`);
+      })
+      .catch((e) => console.error(`onboard background (church ${church.id})`, (e && e.message) || e));
+    res.json({ found: true, churchId: church.id, name, sourceType: det.sourceType, sourceUrl: det.sourceUrl, sampleSermons: det.sampleSermons || [], status: "processing" });
   });
 
   // Start checkout. Detects the source first (never sell what we can't deliver); if nothing is
