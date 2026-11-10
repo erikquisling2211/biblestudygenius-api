@@ -709,6 +709,28 @@ export function mountChurches(app) {
     }
   });
 
+  // Set a sermon's title and/or date (e.g. when transcript-based title detection came up empty).
+  app.post("/admin/sermon/:id/update", async (req, res) => {
+    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
+    const id = parseInt(req.params.id, 10);
+    const b = { ...req.query, ...(req.body || {}) };
+    const sets = []; const vals = []; let i = 1;
+    if (b.title != null) { sets.push(`title = $${i++}`); vals.push(String(b.title)); }
+    if (b.date != null) { sets.push(`date = $${i++}`); vals.push(String(b.date)); }
+    if (!sets.length) return res.status(400).json({ error: "no fields to update (title, date)" });
+    vals.push(id);
+    try {
+      const r = await pool.query(
+        `UPDATE sermons SET ${sets.join(", ")} WHERE id = $${i} RETURNING id, title, date`, vals
+      );
+      if (!r.rows[0]) return res.status(404).json({ error: "not found" });
+      res.json(r.rows[0]);
+    } catch (e) {
+      console.error("POST /admin/sermon/:id/update", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
   // Find the matching YouTube video for a sermon (by church name + title) and set its videoId.
   // ?apply=0 returns candidates without writing. Reusable by the weekly cron.
   app.post("/admin/sermon/:id/findvideo", async (req, res) => {
