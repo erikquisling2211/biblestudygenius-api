@@ -325,6 +325,28 @@ Please sign in and change your password. Reply to this email with any questions.
   } catch (e) { console.error("sendWelcomeEmail", (e && e.message) || e); return false; }
 }
 
+// Alert the admin when a user submits an "add my church" request.
+async function sendRequestAlert({ name, location, email }) {
+  if (!process.env.RESEND_API_KEY) return false;
+  const from = process.env.RESEND_FROM || "Bible Study Genius <hello@biblestudygenius.com>";
+  const to = process.env.ADMIN_ALERT_EMAIL || "erikquisling@yahoo.com";
+  const body = `New church request from the app:
+
+  Church:   ${name}
+  Location: ${location || "(not given)"}
+  From:     ${email || "(not given)"}
+
+Review the queue: ${process.env.API_PUBLIC_URL || "https://biblestudygenius-api-production.up.railway.app"}/admin/requests?token=${encodeURIComponent(process.env.ADMIN_TOKEN || "")}`;
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from, to: [to], reply_to: email || undefined, subject: `Church request: ${name}`, text: body }),
+    });
+    return res.ok;
+  } catch (e) { console.error("sendRequestAlert", (e && e.message) || e); return false; }
+}
+
 // Process a church's first sermon from whichever source is set on its row (feed / scrape / youtube),
 // attaching a matching YouTube video where possible. Shared by onboarding and dashboard setup.
 async function processFirstSermon(church) {
@@ -544,6 +566,7 @@ export function mountChurches(app) {
         `INSERT INTO church_requests (name, location, email, created_at) VALUES ($1,$2,$3,$4)`,
         [name, location, email, Date.now()]
       );
+      sendRequestAlert({ name, location, email }).catch(() => {}); // fire-and-forget
       res.json({ ok: true });
     } catch (e) {
       console.error("POST /church-request", e);
@@ -580,6 +603,89 @@ export function mountChurches(app) {
     } catch (e) {
       res.status(500).json({ error: String((e && e.message) || e) });
     }
+  });
+
+  // Admin: a simple HTML page to review/manage the church-request queue.
+  // Token is read from ?token= in the URL and used for the data calls.
+  app.get("/admin/requests", (req, res) => {
+    res.set("Content-Type", "text/html; charset=utf-8");
+    res.send(`<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Church Requests</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#12152100; background:#121521; color:#e9e6f5; font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:900px; margin:0 auto; padding:24px 16px 60px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:#8f88b5; margin:0 0 18px; }
+  .tabs { display:flex; gap:8px; margin-bottom:14px; }
+  .tabs button { background:#1e2238; color:#b9b3d6; border:1px solid #2a2550; border-radius:999px; padding:6px 16px; font-size:14px; cursor:pointer; }
+  .tabs button.on { background:#e6c45c; color:#1a1f2e; border-color:#e6c45c; font-weight:700; }
+  #status { color:#8f88b5; margin-bottom:10px; font-size:13px; }
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:10px 8px; border-bottom:1px solid #23203f; vertical-align:top; }
+  th { color:#8f88b5; font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  td.when { color:#b9b3d6; white-space:nowrap; font-size:13px; }
+  a { color:#e6c45c; }
+  .badge-new { background:#e6c45c; color:#1a1f2e; border-radius:6px; padding:1px 8px; font-size:12px; font-weight:700; }
+  .badge-done { background:#2a2550; color:#9b95c0; border-radius:6px; padding:1px 8px; font-size:12px; }
+  td button { background:#1e2238; color:#e9e6f5; border:1px solid #2a2550; border-radius:8px; padding:6px 12px; font-size:13px; cursor:pointer; }
+  td button:hover { border-color:#e6c45c; }
+  td.empty { color:#8f88b5; text-align:center; padding:28px; }
+  @media (max-width:560px){ th:nth-child(4),td:nth-child(4){ display:none; } }
+</style></head>
+<body><div class="wrap">
+  <h1>Church Requests</h1>
+  <p class="sub">Submitted from the My Church screen in the app.</p>
+  <div class="tabs"><button id="tab-new" class="on">New</button><button id="tab-all">All</button></div>
+  <div id="status">Loading…</div>
+  <table><thead><tr><th>Church</th><th>Location</th><th>Email</th><th>Submitted</th><th>Status</th><th></th></tr></thead>
+  <tbody id="rows"></tbody></table>
+</div>
+<script>
+  var token = new URLSearchParams(location.search).get('token') || '';
+  var status = 'new';
+  function fmt(ms){ var d = new Date(Number(ms)); return isNaN(d.getTime()) ? '' : d.toLocaleString(); }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
+  function load(){
+    document.getElementById('status').textContent = 'Loading…';
+    fetch('/admin/church-requests?status=' + status, { headers: { 'x-admin-token': token } })
+      .then(function(r){ if(!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then(function(j){ render(j.requests || []); })
+      .catch(function(e){ document.getElementById('status').textContent = e.message==='401' ? 'Unauthorized — add ?token=… to the URL.' : 'Error: ' + e.message; });
+  }
+  function render(rows){
+    document.getElementById('status').textContent = rows.length + ' request' + (rows.length===1?'':'s');
+    var html = '';
+    if(!rows.length){ html = '<tr><td colspan="6" class="empty">No requests.</td></tr>'; }
+    rows.forEach(function(r){
+      var done = r.status !== 'new';
+      html += '<tr>'
+        + '<td>' + esc(r.name) + '</td>'
+        + '<td>' + esc(r.location) + '</td>'
+        + '<td>' + (r.email ? '<a href="mailto:' + esc(r.email) + '">' + esc(r.email) + '</a>' : '') + '</td>'
+        + '<td class="when">' + fmt(r.created_at) + '</td>'
+        + '<td>' + (done ? '<span class="badge-done">done</span>' : '<span class="badge-new">new</span>') + '</td>'
+        + '<td><button data-id="' + r.id + '" data-to="' + (done?'new':'done') + '">' + (done ? 'Reopen' : 'Mark done') + '</button></td>'
+        + '</tr>';
+    });
+    document.getElementById('rows').innerHTML = html;
+    Array.prototype.forEach.call(document.querySelectorAll('#rows button'), function(b){
+      b.onclick = function(){
+        b.disabled = true;
+        fetch('/admin/church-request/' + b.getAttribute('data-id'), { method:'POST', headers:{ 'x-admin-token':token, 'Content-Type':'application/json' }, body: JSON.stringify({ status: b.getAttribute('data-to') }) })
+          .then(function(){ load(); })
+          .catch(function(){ b.disabled = false; });
+      };
+    });
+  }
+  function setStatus(s){ status = s; document.getElementById('tab-new').className = s==='new'?'on':''; document.getElementById('tab-all').className = s==='all'?'on':''; load(); }
+  document.getElementById('tab-new').onclick = function(){ setStatus('new'); };
+  document.getElementById('tab-all').onclick = function(){ setStatus('all'); };
+  load();
+</script>
+</body></html>`);
   });
 
   app.post("/admin/church", async (req, res) => {
