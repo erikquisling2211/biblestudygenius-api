@@ -153,6 +153,18 @@ async function initChurches() {
       created_at BIGINT NOT NULL
     );
   `);
+  // User-submitted "add my church" requests (a queue for admin to onboard).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS church_requests (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      location TEXT,
+      email TEXT,
+      status TEXT NOT NULL DEFAULT 'new',
+      created_at BIGINT NOT NULL
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS church_requests_idx ON church_requests(status, created_at DESC);`);
   console.log("✅ Churches tables ready");
 }
 
@@ -513,6 +525,62 @@ export function mountChurches(app) {
     cron.schedule("0 6 * * 1", () => { processAllChurches().catch((e) => console.error("weekly cron", e)); }, { timezone: "America/Chicago" });
     console.log("⏰ Weekly sermon cron scheduled (Mon 6:00 AM CT)");
   }
+
+  // Public: a user asks us to add their church. Lands in the church_requests queue.
+  app.post("/church-request", async (req, res) => {
+    const b = req.body || {};
+    const name = String(b.name || "").trim().slice(0, 200);
+    const location = String(b.location || "").trim().slice(0, 200) || null;
+    const email = String(b.email || "").trim().slice(0, 200) || null;
+    if (!name) return res.status(400).json({ error: "name required" });
+    try {
+      // Light de-dup: skip an identical open request from the last 30 days.
+      const dup = await pool.query(
+        `SELECT 1 FROM church_requests WHERE lower(name)=lower($1) AND status='new' AND created_at > $2 LIMIT 1`,
+        [name, Date.now() - 30 * 86400000]
+      );
+      if (dup.rowCount) return res.json({ ok: true, duplicate: true });
+      await pool.query(
+        `INSERT INTO church_requests (name, location, email, created_at) VALUES ($1,$2,$3,$4)`,
+        [name, location, email, Date.now()]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("POST /church-request", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
+  // Admin: list church requests (newest first). ?status=new|done|all (default new).
+  app.get("/admin/church-requests", async (req, res) => {
+    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
+    const status = String(req.query.status || "new");
+    try {
+      const where = status === "all" ? "" : "WHERE status = $1";
+      const params = status === "all" ? [] : [status];
+      const r = await pool.query(
+        `SELECT id, name, location, email, status, created_at FROM church_requests ${where} ORDER BY created_at DESC LIMIT 500`,
+        params
+      );
+      res.json({ requests: r.rows });
+    } catch (e) {
+      console.error("GET /admin/church-requests", e);
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
+
+  // Admin: mark a request handled (or any status). body { status }
+  app.post("/admin/church-request/:id", async (req, res) => {
+    if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
+    const id = parseInt(req.params.id, 10);
+    const status = String((req.body || {}).status || "done").slice(0, 20);
+    try {
+      await pool.query(`UPDATE church_requests SET status = $1 WHERE id = $2`, [status, id]);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: String((e && e.message) || e) });
+    }
+  });
 
   app.post("/admin/church", async (req, res) => {
     if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
