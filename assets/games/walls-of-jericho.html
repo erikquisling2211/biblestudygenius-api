@@ -286,7 +286,7 @@
         mesh.castShadow=mesh.receiveShadow=true; mesh.position.set(x,y,z); scene.add(mesh);
         const body=new CANNON.Body({mass:0,type:CANNON.Body.KINEMATIC,shape:new CANNON.Box(new CANNON.Vec3((BW-0.03)/2,(BH-0.03)/2,(BD-0.03)/2))});
         body.position.set(x,y,z); body.linearDamping=0.2; body.angularDamping=0.4; body.allowSleep=false; body.sleepSpeedLimit=0.7; body.sleepTimeLimit=0.2; world.addBody(body);
-        bricks.push({mesh,body,gone:false,standing:true,type:cell.type,keyFired:false,goldScored:false,bi,dynMass:mass,start:new THREE.Vector3(x,y,z)}); }
+        bricks.push({mesh,body,gone:false,standing:true,type:cell.type,keyFired:false,goldScored:false,bi,dynMass:mass,gx:Math.round(cell.x/BW*2),gy:cell.row,start:new THREE.Vector3(x,y,z)}); }
       minX=Math.min(minX,cx-bs.halfX-bs.amp); maxX=Math.max(maxX,cx+bs.halfX+bs.amp); maxTop=Math.max(maxTop, baseTopY+(bs.maxRow+1)*BH);
       si++;
     }
@@ -374,7 +374,22 @@
   }
   function clearDeto(){ for(const d of detos){ scene.remove(d.sphere); scene.remove(d.ring); } detos=[]; flashLight.intensity=0; }
 
+  // Any pinned block no longer connected down to the base (floating after a hole is blown) gets released and falls.
+  function supportPass(){
+    const byBase={};
+    for(const b of bricks){ if(b.gone||b.body.type!==CANNON.Body.KINEMATIC) continue; (byBase[b.bi]=byBase[b.bi]||[]).push(b); }
+    for(const bi in byBase){ const list=byBase[bi], present=new Map();
+      for(const b of list) present.set(b.gx+','+b.gy, b);
+      const grounded=new Set(), q=[];
+      for(const b of list){ if(b.gy===0){ grounded.add(b.gx+','+b.gy); q.push(b); } }   // resting on the base
+      while(q.length){ const b=q.pop();
+        for(const [nx,ny] of [[b.gx,b.gy+1],[b.gx,b.gy-1],[b.gx+2,b.gy],[b.gx-2,b.gy]]){ const k=nx+','+ny;
+          if(present.has(k)&&!grounded.has(k)){ grounded.add(k); q.push(present.get(k)); } } }
+      for(const b of list){ if(!grounded.has(b.gx+','+b.gy)){ freeBrick(b); b.body.applyImpulse(new CANNON.Vec3((Math.random()-0.5)*2,0,-1),new CANNON.Vec3(0,0,0)); } }
+    }
+  }
   function resolveShot(){
+    supportPass();   // drop any block left hanging unsupported by the blast
     const after=updateStanding(), toppled=Math.max(0, state.standBefore-after);
     const mult = toppled>=12?5 : toppled>=8?4 : toppled>=5?3 : toppled>=3?2 : 1;   // big collapses = big multiplier
     if(toppled>0){ const pts=toppled*10*mult; state.score+=pts; updateScore();
