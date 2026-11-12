@@ -186,7 +186,7 @@
 
     world=new CANNON.World(); world.gravity.set(0,-12,0); world.broadphase=new CANNON.NaiveBroadphase();
     world.solver.iterations=22; world.solver.tolerance=0.001; world.allowSleep=true;
-    world.defaultContactMaterial.friction=0.8; world.defaultContactMaterial.restitution=0.0;
+    world.defaultContactMaterial.friction=0.42; world.defaultContactMaterial.restitution=0.0;
     world.defaultContactMaterial.contactEquationStiffness=1e6; world.defaultContactMaterial.contactEquationRelaxation=3;
     const gb=new CANNON.Body({mass:0,shape:new CANNON.Plane()}); gb.quaternion.setFromAxisAngle(new CANNON.Vec3(1,0,0),-Math.PI/2); world.addBody(gb);
     resize(); window.addEventListener('resize',resize); window.addEventListener('orientationchange',()=>setTimeout(resize,250));
@@ -201,7 +201,7 @@
     LOOKAT.set(_cx,_maxTop*0.40,0);
     const tgt=new THREE.Vector3(_cx,_maxTop*0.52+3.2,dist); camBase.copy(tgt); camTarget.copy(tgt);
     // Big cannon held close to the camera at the bottom — fixed distance in front, so its size stays constant and it's nowhere near the distant walls.
-    HORN.set(_cx, 2.9, dist-6); if(horn){ horn.position.copy(HORN); horn.scale.setScalar(1.2); }
+    HORN.set(_cx, 3.1, dist-7); if(horn){ horn.position.copy(HORN); horn.scale.setScalar(0.62); }
     if(dais){ dais.position.set(HORN.x, 0.2, HORN.z); }
   }
   function resize(){
@@ -315,7 +315,7 @@
   function updateScore(){ document.getElementById('scoreVal').textContent=state.score; }
 
   // ---- Shockwave ----
-  function previewRadius(power){ return 0.55+power*0.8; }   // tight, focused beam — only a local cluster per shot
+  function previewRadius(power){ return 0.5+power*0.7; }   // tight, focused beam — a small cluster per shot
   function startPulse(target,power){
     const isFinal = state.blasts===1;   // the last blast is the great seventh shout
     state.canFire=false; state.phase='pulsing'; state.standBefore=countOnBase(); state.blasts--; drawHorns(); hornS(); hideHint();
@@ -351,7 +351,7 @@
       for(const b of bricks){ if(b.gone||d.hit.has(b)) continue;
         const p=b.body.position, dx=p.x-d.center.x, dy=p.y-d.center.y, dz=p.z-d.center.z, dist=Math.hypot(dx,dy,dz);
         if(dist<=d.r){ d.hit.add(b);
-          const fall=Math.pow(1-Math.min(1,dist/d.max),1.7), f=fall*(10+d.power*13)*(d.key?1.2:1);
+          const fall=Math.pow(1-Math.min(1,dist/d.max),1.2), f=fall*(30+d.power*38)*(d.key?1.2:1);
           let hx=dx, hz=dz, hl=Math.hypot(hx,hz); if(hl<0.01){ hx=Math.random()-0.5; hz=Math.random()-0.5; hl=Math.hypot(hx,hz)||1; } hx/=hl; hz/=hl;
           activate(b.bi);   // lock & release this structure into full physics
           b.body.wakeUp();
