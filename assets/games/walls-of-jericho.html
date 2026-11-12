@@ -87,12 +87,12 @@
   const W=900, H=560;
   const HORN=new THREE.Vector3(0,0.5,22);
   const LEVELS=[
-    { day:'Day 1', blasts:16, par:12, verse:'“You shall march around the city... the wall of the city will fall down flat.”', cite:'Joshua 6:3–5 (WEB)',
-      structs:[ {shape:'wall',cols:3,rows:12,x:-2.4}, {shape:'wall',cols:3,rows:12,x:2.4} ] },
-    { day:'Day 4', blasts:17, par:13, verse:'“Behold, I have given Jericho into your hand, with its king and the mighty men of valor.”', cite:'Joshua 6:2 (WEB)',
+    { day:'Day 1', blasts:20, par:15, verse:'“You shall march around the city... the wall of the city will fall down flat.”', cite:'Joshua 6:3–5 (WEB)',
+      structs:[ {shape:'wall',cols:4,rows:9,x:-2.4}, {shape:'wall',cols:4,rows:9,x:2.4} ] },
+    { day:'Day 4', blasts:18, par:14, verse:'“Behold, I have given Jericho into your hand, with its king and the mighty men of valor.”', cite:'Joshua 6:2 (WEB)',
       structs:[ {shape:'gate',x:0} ] },
-    { day:'Day 7', blasts:22, par:17, verse:'“The people shouted, and the priests blew the trumpets... the wall fell down flat, and they took the city.”', cite:'Joshua 6:20 (WEB)',
-      structs:[ {shape:'wall',cols:3,rows:15,x:-2.4}, {shape:'wall',cols:3,rows:15,x:2.4} ] },
+    { day:'Day 7', blasts:28, par:22, verse:'“The people shouted, and the priests blew the trumpets... the wall fell down flat, and they took the city.”', cite:'Joshua 6:20 (WEB)',
+      structs:[ {shape:'wall',cols:4,rows:11,x:-2.4}, {shape:'wall',cols:4,rows:11,x:2.4} ] },
   ];
   // Each shape returns grid cells {x: world-x of brick center, row: 0=bottom} placed on the base.
   function shapeCells(L){
@@ -195,15 +195,14 @@
   function refit(){
     if(!camera) return;
     const w=cv.clientWidth||900, h=cv.clientHeight||560, aspect=Math.max(0.4,w/h), t=Math.tan(camera.fov*Math.PI/360);
-    // Fit the single structure: width needs (half+pad)/(t*aspect), height needs half/t. Take the binding one; cap it so the wall never shrinks into the fog on a tall, narrow phone.
-    const distW=(_span*0.60)/(t*aspect), distH=(_maxTop*0.52)/t;
-    const dist=Math.min(Math.max(distW, distH, 14), 22);
-    // Aim a bit low so the wall rides high in the frame with little sky above.
-    LOOKAT.set(_cx,_maxTop*0.34,0);
-    const tgt=new THREE.Vector3(_cx,_maxTop*0.44+1.5,dist); camBase.copy(tgt); camTarget.copy(tgt);
-    // Horn grows WITH the camera distance so its apparent size stays constant; small, low, clear of the wall.
-    HORN.set(_cx, dist*0.12, dist*0.58); if(horn){ horn.position.copy(HORN); horn.scale.setScalar(dist*0.034); }
-    if(dais){ dais.position.set(HORN.x, dist*0.12-1.25, HORN.z); }
+    // Smash-Fest framing: walls sit well up the frame at a distance; the camera rides high and looks down so there's open ground between the cannon and the walls.
+    const distW=(_span*0.58)/(t*aspect), distH=(_maxTop*0.50)/t;
+    const dist=Math.min(Math.max(distW, distH, 18), 30);
+    LOOKAT.set(_cx,_maxTop*0.40,0);
+    const tgt=new THREE.Vector3(_cx,_maxTop*0.52+3.2,dist); camBase.copy(tgt); camTarget.copy(tgt);
+    // Big cannon held close to the camera at the bottom — fixed distance in front, so its size stays constant and it's nowhere near the distant walls.
+    HORN.set(_cx, 2.9, dist-6); if(horn){ horn.position.copy(HORN); horn.scale.setScalar(1.2); }
+    if(dais){ dais.position.set(HORN.x, 0.2, HORN.z); }
   }
   function resize(){
     if(!renderer||!camera) return;
