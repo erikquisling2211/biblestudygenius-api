@@ -88,11 +88,11 @@
   const HORN=new THREE.Vector3(0,0.5,22);
   const LEVELS=[
     { day:'Day 1', blasts:18, par:13, verse:'“You shall march around the city... the wall of the city will fall down flat.”', cite:'Joshua 6:3–5 (WEB)',
-      structs:[ {shape:'wall',cols:4,rows:12,x:-2.6}, {shape:'wall',cols:4,rows:12,x:2.6} ] },
+      structs:[ {shape:'wall',cols:5,rows:13,x:0} ] },
     { day:'Day 4', blasts:19, par:14, verse:'“Behold, I have given Jericho into your hand, with its king and the mighty men of valor.”', cite:'Joshua 6:2 (WEB)',
-      structs:[ {shape:'ziggurat',baseCols:7,x:-3.0}, {shape:'wall',cols:4,rows:12,x:3.0} ] },
+      structs:[ {shape:'ziggurat',baseCols:7,x:0} ] },
     { day:'Day 7', blasts:24, par:18, verse:'“The people shouted, and the priests blew the trumpets... the wall fell down flat, and they took the city.”', cite:'Joshua 6:20 (WEB)',
-      structs:[ {shape:'gate',x:0}, {shape:'wall',cols:3,rows:11,x:-4.4}, {shape:'wall',cols:3,rows:11,x:4.4} ] },
+      structs:[ {shape:'gate',x:0} ] },
   ];
   // Each shape returns grid cells {x: world-x of brick center, row: 0=bottom} placed on the base.
   function shapeCells(L){
@@ -196,13 +196,14 @@
   function refit(){
     if(!camera) return;
     const w=cv.clientWidth||900, h=cv.clientHeight||560, aspect=Math.max(0.4,w/h), t=Math.tan(camera.fov*Math.PI/360);
-    // Fit so the walls fill the upper frame (width binds in portrait, height in landscape); horn sits small and low.
-    const dist=Math.max((_span*0.60)/(t*aspect), (_maxTop*0.58)/t, 15);
-    LOOKAT.set(_cx,_maxTop*0.46,0);
-    const tgt=new THREE.Vector3(_cx,_maxTop*0.52+1.5,dist); camBase.copy(tgt); camTarget.copy(tgt);
-    // Horn is a small instrument low in the foreground, well below the walls — never over them.
-    HORN.set(_cx,0.9,dist-9); if(horn){ horn.position.copy(HORN); horn.scale.setScalar(0.78); }
-    if(dais){ dais.position.set(HORN.x,-0.2,HORN.z); }
+    // Fit the single structure: width needs (half+pad)/(t*aspect), height needs half/t. Take the binding one; cap it so the wall never shrinks into the fog on a tall, narrow phone.
+    const distW=(_span*0.60)/(t*aspect), distH=(_maxTop*0.52)/t;
+    const dist=Math.min(Math.max(distW, distH, 14), 22);
+    LOOKAT.set(_cx,_maxTop*0.44,0);
+    const tgt=new THREE.Vector3(_cx,_maxTop*0.48+2,dist); camBase.copy(tgt); camTarget.copy(tgt);
+    // Horn grows WITH the camera distance so its apparent size stays small and constant, low in the foreground.
+    HORN.set(_cx, dist*0.11, dist*0.60); if(horn){ horn.position.copy(HORN); horn.scale.setScalar(dist*0.032); }
+    if(dais){ dais.position.set(HORN.x, dist*0.11-1.1, HORN.z); }
   }
   function resize(){
     if(!renderer||!camera) return;
