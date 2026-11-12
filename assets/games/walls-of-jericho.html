@@ -88,20 +88,20 @@
   const HORN=new THREE.Vector3(0,0.5,22);
   const LEVELS=[
     { day:'Day 1', blasts:18, par:13, verse:'“You shall march around the city... the wall of the city will fall down flat.”', cite:'Joshua 6:3–5 (WEB)',
-      structs:[ {shape:'wall',cols:5,rows:15,x:-4.8}, {shape:'wall',cols:5,rows:15,x:4.8} ] },
+      structs:[ {shape:'wall',cols:5,rows:10,x:-4.8}, {shape:'wall',cols:5,rows:10,x:4.8} ] },
     { day:'Day 4', blasts:19, par:14, verse:'“Behold, I have given Jericho into your hand, with its king and the mighty men of valor.”', cite:'Joshua 6:2 (WEB)',
-      structs:[ {shape:'ziggurat',baseCols:11,x:-5.5}, {shape:'wall',cols:5,rows:15,x:5.5} ] },
+      structs:[ {shape:'ziggurat',baseCols:9,x:-5.5}, {shape:'wall',cols:5,rows:10,x:5.5} ] },
     { day:'Day 7', blasts:24, par:18, verse:'“The people shouted, and the priests blew the trumpets... the wall fell down flat, and they took the city.”', cite:'Joshua 6:20 (WEB)',
-      structs:[ {shape:'gate',x:0}, {shape:'wall',cols:3,rows:15,x:-7.5}, {shape:'wall',cols:3,rows:15,x:7.5} ] },
+      structs:[ {shape:'gate',x:0}, {shape:'wall',cols:3,rows:10,x:-7.5}, {shape:'wall',cols:3,rows:10,x:7.5} ] },
   ];
   // Each shape returns grid cells {x: world-x of brick center, row: 0=bottom} placed on the base.
   function shapeCells(L){
     const a=[];
     if(L.shape==='ziggurat'){ let w=L.baseCols, r=0; while(w>=1){ for(let c=0;c<w;c++) a.push({x:(c-(w-1)/2)*BW,row:r}); w-=2; r++; } }
     else if(L.shape==='gate'){ const P=(x,row)=>a.push({x:x*BW,row});
-      for(let r=0;r<12;r++) [-2.5,-1.5,1.5,2.5].forEach(x=>P(x,r));  // two tall towers, central doorway
-      [-2.5,-1.5,-0.5,0.5,1.5,2.5].forEach(x=>P(x,12));              // lintel across the top
-      [-2.5,-0.5,1.5].forEach(x=>P(x,13)); }                         // battlements
+      for(let r=0;r<8;r++) [-2.5,-1.5,1.5,2.5].forEach(x=>P(x,r));   // two towers, central doorway
+      [-2.5,-1.5,-0.5,0.5,1.5,2.5].forEach(x=>P(x,8));               // lintel across the top
+      [-2.5,-0.5,1.5].forEach(x=>P(x,9)); }                          // battlements
     else { for(let r=0;r<L.rows;r++) for(let c=0;c<L.cols;c++) a.push({x:(c-(L.cols-1)/2)*BW,row:r}); }
     return a;
   }
@@ -114,14 +114,14 @@
     for(let r=1;r<maxRow;r+=rowStep){ const rc=cells.filter(c=>c.row===r).sort((a,b)=>a.x-b.x); if(!rc.length) continue;
       const picks = li<=0 ? [rc[0], rc[(rc.length/2)|0], rc[rc.length-1]] : li===1 ? [rc[0], rc[rc.length-1]] : [rc[(rc.length/2)|0]];
       for(const c of picks) if(c.type==='normal') c.type='key'; }
-    if(st.shape==='gate'){ for(const c of cells){ if(c.row===12 && Math.abs(c.x)<=0.5*BW+0.01 && c.type==='normal') c.type='key'; } } // doorway keystone
+    if(st.shape==='gate'){ for(const c of cells){ if(c.row===8 && Math.abs(c.x)<=0.5*BW+0.01 && c.type==='normal') c.type='key'; } } // doorway keystone
     const top=cells.filter(c=>c.row===maxRow); if(top.length){ const g=top[(top.length/2)|0]; if(g.type!=='corner') g.type='gold'; }
   }
   const BW=1.0, BH=0.55, BD=0.72;
   const cv=document.getElementById('c');
 
   let renderer, scene, camera, world, camBase, camTarget, _span=10, _maxTop=6, _cx=0;
-  let bricks=[], particles=[], pulse=null, detos=[], previewSphere, reticle, horn, flashLight;
+  let bricks=[], particles=[], pulse=null, detos=[], previewSphere, reticle, horn, dais, flashLight;
   let bases=[], baseTopY=1.3;
   let LOOKAT=new THREE.Vector3(0,2.6,0);
   let aim=new THREE.Vector3(0,1.8,0), initialOnBase=1, shake=0, timeScale=1, MUZZLE=new THREE.Vector3(), hintUntil=0, standNow=1;
@@ -177,8 +177,8 @@
     const aimDir=new THREE.Vector3(0,3.4,0).sub(HORN).normalize();     // aim the bell up toward the walls
     horn.quaternion.setFromUnitVectors(new THREE.Vector3(1,0,0), aimDir);
     scene.add(horn);
-    const dais=new THREE.Mesh(new THREE.CylinderGeometry(1.5,2,1.6,12), new THREE.MeshStandardMaterial({color:0x6b543a,roughness:1}));
-    dais.position.set(HORN.x,-0.2,HORN.z); dais.castShadow=dais.receiveShadow=true; scene.add(dais);
+    dais=new THREE.Mesh(new THREE.CylinderGeometry(1.1,1.5,1.2,12), new THREE.MeshStandardMaterial({color:0x6b543a,roughness:1}));
+    dais.position.set(HORN.x,-0.3,HORN.z); dais.castShadow=dais.receiveShadow=true; scene.add(dais);
 
     reticle=new THREE.Mesh(new THREE.RingGeometry(0.26,0.36,24), new THREE.MeshBasicMaterial({color:0xe9c55c,side:THREE.DoubleSide,transparent:true,opacity:0.9}));
     scene.add(reticle);
@@ -196,10 +196,13 @@
   function refit(){
     if(!camera) return;
     const w=cv.clientWidth||900, h=cv.clientHeight||560, aspect=Math.max(0.4,w/h), t=Math.tan(camera.fov*Math.PI/360);
-    const dist=Math.max((_maxTop*0.54)/t, (_span*0.54)/(t*aspect), 12);
-    LOOKAT.set(_cx,_maxTop*0.5,0);
-    const tgt=new THREE.Vector3(_cx,_maxTop*0.5+2.5,dist); camBase.copy(tgt); camTarget.copy(tgt);
-    HORN.set(_cx,2.2,dist-9); if(horn) horn.position.copy(HORN);
+    // Pull the camera well back so the walls sit deep in the frame, with the horn as a small foreground element.
+    const dist=Math.max((_maxTop*0.80)/t, (_span*0.64)/(t*aspect), 24);
+    LOOKAT.set(_cx,_maxTop*0.38,-2);
+    const tgt=new THREE.Vector3(_cx,_maxTop*0.55+4,dist); camBase.copy(tgt); camTarget.copy(tgt);
+    // Horn stays a fixed short distance in front of the camera, low and small, so it never covers the walls.
+    HORN.set(_cx,1.7,dist-9.5); if(horn){ horn.position.copy(HORN); horn.scale.setScalar(0.9); }
+    if(dais){ dais.position.set(HORN.x,0.1,HORN.z); }
   }
   function resize(){
     if(!renderer||!camera) return;
@@ -243,14 +246,14 @@
     const cap=new THREE.Mesh(new THREE.BoxGeometry(halfX*2+0.12,0.1,halfZ*2+0.12), new THREE.MeshStandardMaterial({color:0x8c7a5a,roughness:0.9}));
     cap.position.set(cx,topY+0.02,cz); cap.receiveShadow=true; scene.add(cap);
     const body=new CANNON.Body({mass:0,type:CANNON.Body.KINEMATIC,shape:new CANNON.Box(new CANNON.Vec3(halfX,topY/2,halfZ))});
-    body.position.set(cx,topY/2,cz); world.addBody(body);
+    body.allowSleep=false; body.position.set(cx,topY/2,cz); world.addBody(body);
     const bs={mesh,cap,body,cx,cz,cx0:cx,halfX,halfZ,topY,maxRow,amp:0,speed:0,phase:0,activated:false}; bases.push(bs); return bs;
   }
   function onAnyBase(p){ for(const bs of bases){ if(Math.abs(p.x-bs.cx)<=bs.halfX+0.05 && Math.abs(p.z-bs.cz)<=bs.halfZ+0.05 && p.y>bs.topY-0.1) return true; } return false; }
   // A structure drifts as a rigid kinematic unit until a blast hits it; then it "locks" and its stones collapse with full physics.
   function activate(i){ const bs=bases[i]; if(!bs||bs.activated) return; bs.activated=true;
     bs.body.type=CANNON.Body.STATIC; bs.body.velocity.set(0,0,0); if(bs.body.updateMassProperties) bs.body.updateMassProperties();
-    for(const b of bricks){ if(b.bi===i && b.body.type===CANNON.Body.KINEMATIC){ b.body.type=CANNON.Body.DYNAMIC; b.body.mass=b.dynMass; b.body.velocity.set(0,0,0); b.body.updateMassProperties(); b.body.wakeUp(); } }
+    for(const b of bricks){ if(b.bi===i && b.body.type===CANNON.Body.KINEMATIC){ b.body.type=CANNON.Body.DYNAMIC; b.body.mass=b.dynMass; b.body.velocity.set(0,0,0); b.body.allowSleep=true; b.body.updateMassProperties(); b.body.wakeUp(); } }
   }
   function drift(now){
     const t=now*0.001;
@@ -278,7 +281,7 @@
         const mesh=new THREE.Mesh(new THREE.BoxGeometry(BW-0.03,BH-0.03,BD-0.03), new THREE.MeshStandardMaterial({color,roughness:rough,metalness:metal}));
         mesh.castShadow=mesh.receiveShadow=true; mesh.position.set(x,y,z); scene.add(mesh);
         const body=new CANNON.Body({mass:0,type:CANNON.Body.KINEMATIC,shape:new CANNON.Box(new CANNON.Vec3((BW-0.03)/2,(BH-0.03)/2,(BD-0.03)/2))});
-        body.position.set(x,y,z); body.linearDamping=0.2; body.angularDamping=0.4; body.allowSleep=true; body.sleepSpeedLimit=0.7; body.sleepTimeLimit=0.2; world.addBody(body);
+        body.position.set(x,y,z); body.linearDamping=0.2; body.angularDamping=0.4; body.allowSleep=false; body.sleepSpeedLimit=0.7; body.sleepTimeLimit=0.2; world.addBody(body);
         bricks.push({mesh,body,gone:false,standing:true,type:cell.type,keyFired:false,goldScored:false,bi,dynMass:mass,start:new THREE.Vector3(x,y,z)}); }
       minX=Math.min(minX,cx-bs.halfX-bs.amp); maxX=Math.max(maxX,cx+bs.halfX+bs.amp); maxTop=Math.max(maxTop, baseTopY+(bs.maxRow+1)*BH);
       si++;
