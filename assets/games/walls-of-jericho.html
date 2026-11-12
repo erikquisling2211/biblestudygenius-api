@@ -8,11 +8,11 @@
   body{
     margin:0; background:radial-gradient(120% 90% at 50% -10%, #2d2142 0%, #171320 70%);
     color:var(--ink); font-family:Inter,system-ui,sans-serif;
-    display:flex; align-items:center; justify-content:center;
+    display:flex; align-items:stretch; justify-content:center;
     padding-left:max(16px,env(safe-area-inset-left,0px)); padding-right:max(16px,env(safe-area-inset-right,0px));
     padding-block:16px; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
   }
-  .stage{width:100%; max-width:900px; display:flex; flex-direction:column; gap:10px}
+  .stage{width:100%; max-width:900px; height:100%; display:flex; flex-direction:column; gap:10px; min-height:0}
   .hud{display:flex; align-items:center; gap:10px; justify-content:space-between;
     background:linear-gradient(180deg,#241d31,#1a1524); border:1px solid var(--panel-edge); border-radius:12px; padding:9px 12px}
   .hud .day{font-family:Cinzel,serif; font-weight:700; letter-spacing:.04em; font-size:clamp(14px,2.4vw,18px); white-space:nowrap}
@@ -23,8 +23,8 @@
   .tools{display:flex; gap:6px}
   .tools button{background:#2a2235; color:var(--ink); border:1px solid var(--panel-edge); border-radius:9px; width:36px; height:36px; font-size:16px; cursor:pointer; display:grid; place-items:center}
   .tools button:hover{border-color:var(--gold)} .tools button:focus-visible{outline:2px solid var(--gold); outline-offset:2px}
-  .frame{position:relative; width:100%; border-radius:14px; overflow:hidden; border:1px solid #42324a; box-shadow:0 18px 40px -20px #000, inset 0 0 0 1px #ffffff0a}
-  canvas{display:block; width:100%; height:auto; touch-action:none}
+  .frame{position:relative; width:100%; flex:1; min-height:0; border-radius:14px; overflow:hidden; border:1px solid #42324a; box-shadow:0 18px 40px -20px #000, inset 0 0 0 1px #ffffff0a}
+  canvas{display:block; width:100%; height:100%; touch-action:none}
   .standing{display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:13px; color:var(--ink-dim); padding:0 4px}
   .standing b{color:var(--gold)}
   .meter{height:7px; flex:1; max-width:300px; background:#2a2235; border-radius:99px; overflow:hidden; border:1px solid #39304a}
@@ -119,7 +119,7 @@
   const BW=1.0, BH=0.55, BD=0.72;
   const cv=document.getElementById('c');
 
-  let renderer, scene, camera, world, camBase, camTarget;
+  let renderer, scene, camera, world, camBase, camTarget, _span=10, _maxTop=6, _cx=0;
   let bricks=[], particles=[], pulse=null, detos=[], previewSphere, reticle, horn, flashLight;
   let bases=[], baseTopY=1.3;
   let LOOKAT=new THREE.Vector3(0,2.6,0);
@@ -150,7 +150,6 @@
   function initScene(){
     renderer=new THREE.WebGLRenderer({canvas:cv, antialias:true});
     renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
-    renderer.setSize(W,H,false);
     renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
     renderer.outputEncoding=THREE.sRGBEncoding; renderer.toneMapping=THREE.ACESFilmicToneMapping; renderer.toneMappingExposure=1.15;
 
@@ -190,6 +189,21 @@
     world.defaultContactMaterial.friction=0.55; world.defaultContactMaterial.restitution=0.0;
     world.defaultContactMaterial.contactEquationStiffness=1e6; world.defaultContactMaterial.contactEquationRelaxation=3;
     const gb=new CANNON.Body({mass:0,shape:new CANNON.Plane()}); gb.quaternion.setFromAxisAngle(new CANNON.Vec3(1,0,0),-Math.PI/2); world.addBody(gb);
+    resize(); window.addEventListener('resize',resize); window.addEventListener('orientationchange',()=>setTimeout(resize,250));
+  }
+  // Fit the camera so the whole scene fills the viewport at any aspect (portrait phone, landscape, desktop).
+  function refit(){
+    if(!camera) return;
+    const w=cv.clientWidth||900, h=cv.clientHeight||560, aspect=Math.max(0.4,w/h), t=Math.tan(camera.fov*Math.PI/360);
+    const dist=Math.max((_maxTop*0.54)/t, (_span*0.54)/(t*aspect), 12);
+    LOOKAT.set(_cx,_maxTop*0.5,0);
+    const tgt=new THREE.Vector3(_cx,_maxTop*0.5+2.5,dist); camBase.copy(tgt); camTarget.copy(tgt);
+    HORN.set(_cx,2.2,dist-9); if(horn) horn.position.copy(HORN);
+  }
+  function resize(){
+    if(!renderer||!camera) return;
+    const w=cv.clientWidth||900, h=cv.clientHeight||560;
+    renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); refit();
   }
   function duskTexture(){ const c=document.createElement('canvas'); c.width=16; c.height=256; const x=c.getContext('2d');
     const g=x.createLinearGradient(0,0,0,256); g.addColorStop(0,'#241a3a'); g.addColorStop(0.5,'#6b3f52'); g.addColorStop(0.8,'#b06a45'); g.addColorStop(1,'#d68a4e');
@@ -252,10 +266,7 @@
         bricks.push({mesh,body,gone:false,standing:true,type:cell.type,keyFired:false,goldScored:false,start:new THREE.Vector3(x,y,z)}); }
       minX=Math.min(minX,cx-bs.halfX); maxX=Math.max(maxX,cx+bs.halfX); maxTop=Math.max(maxTop, baseTopY+(bs.maxRow+1)*BH);
     }
-    const cx=(minX+maxX)/2, span=maxX-minX;
-    LOOKAT.set(cx, maxTop*0.5, 0);
-    camBase.set(cx, maxTop*0.6+3, 15+span*0.5); camTarget=camBase.clone();
-    HORN.set(cx, 2.4, camBase.z-9); if(horn) horn.position.copy(HORN);   // horn in the lower foreground, in frame
+    _cx=(minX+maxX)/2; _span=maxX-minX; _maxTop=maxTop; refit();   // frame the whole scene to the viewport
     state.combo=0;
     initialOnBase=countOnBase();
     state.blasts=L.blasts; state.canFire=true; state.phase='ready';
