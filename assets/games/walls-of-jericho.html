@@ -315,7 +315,7 @@
   function updateScore(){ document.getElementById('scoreVal').textContent=state.score; }
 
   // ---- Shockwave ----
-  function previewRadius(power){ return 1.3+power*1.9; }
+  function previewRadius(power){ return 0.85+power*1.25; }   // narrower, more focused beam — rewards precise aim
   function startPulse(target,power){
     const isFinal = state.blasts===1;   // the last blast is the great seventh shout
     state.canFire=false; state.phase='pulsing'; state.standBefore=countOnBase(); state.blasts--; drawHorns(); hornS(); hideHint();
