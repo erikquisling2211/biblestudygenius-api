@@ -110,8 +110,9 @@
     let maxRow=0,minX=1e9,maxX=-1e9; for(const c of cells){ c.type='normal'; maxRow=Math.max(maxRow,c.row); minX=Math.min(minX,c.x); maxX=Math.max(maxX,c.x); }
     for(const c of cells){ if(c.row===0 && (c.x===minX||c.x===maxX)) c.type='corner'; }
     // Spread keystones across the whole structure: left / centre / right on every other row.
-    for(let r=1;r<maxRow;r+=2){ const rc=cells.filter(c=>c.row===r).sort((a,b)=>a.x-b.x); if(!rc.length) continue;
-      const picks=[rc[0], rc[(rc.length/2)|0], rc[rc.length-1]];
+    const li=state.li, rowStep=2+li;   // fewer keystones each successive round
+    for(let r=1;r<maxRow;r+=rowStep){ const rc=cells.filter(c=>c.row===r).sort((a,b)=>a.x-b.x); if(!rc.length) continue;
+      const picks = li<=0 ? [rc[0], rc[(rc.length/2)|0], rc[rc.length-1]] : li===1 ? [rc[0], rc[rc.length-1]] : [rc[(rc.length/2)|0]];
       for(const c of picks) if(c.type==='normal') c.type='key'; }
     if(st.shape==='gate'){ for(const c of cells){ if(c.row===12 && Math.abs(c.x)<=0.5*BW+0.01 && c.type==='normal') c.type='key'; } } // doorway keystone
     const top=cells.filter(c=>c.row===maxRow); if(top.length){ const g=top[(top.length/2)|0]; if(g.type!=='corner') g.type='gold'; }
@@ -241,18 +242,33 @@
     mesh.position.set(cx,topY/2,cz); mesh.castShadow=mesh.receiveShadow=true; scene.add(mesh);
     const cap=new THREE.Mesh(new THREE.BoxGeometry(halfX*2+0.12,0.1,halfZ*2+0.12), new THREE.MeshStandardMaterial({color:0x8c7a5a,roughness:0.9}));
     cap.position.set(cx,topY+0.02,cz); cap.receiveShadow=true; scene.add(cap);
-    const body=new CANNON.Body({mass:0,shape:new CANNON.Box(new CANNON.Vec3(halfX,topY/2,halfZ))});
+    const body=new CANNON.Body({mass:0,type:CANNON.Body.KINEMATIC,shape:new CANNON.Box(new CANNON.Vec3(halfX,topY/2,halfZ))});
     body.position.set(cx,topY/2,cz); world.addBody(body);
-    const bs={mesh,cap,body,cx,cz,halfX,halfZ,topY,maxRow}; bases.push(bs); return bs;
+    const bs={mesh,cap,body,cx,cz,cx0:cx,halfX,halfZ,topY,maxRow,amp:0,speed:0,phase:0,activated:false}; bases.push(bs); return bs;
   }
   function onAnyBase(p){ for(const bs of bases){ if(Math.abs(p.x-bs.cx)<=bs.halfX+0.05 && Math.abs(p.z-bs.cz)<=bs.halfZ+0.05 && p.y>bs.topY-0.1) return true; } return false; }
+  // A structure drifts as a rigid kinematic unit until a blast hits it; then it "locks" and its stones collapse with full physics.
+  function activate(i){ const bs=bases[i]; if(!bs||bs.activated) return; bs.activated=true;
+    bs.body.type=CANNON.Body.STATIC; bs.body.velocity.set(0,0,0); if(bs.body.updateMassProperties) bs.body.updateMassProperties();
+    for(const b of bricks){ if(b.bi===i && b.body.type===CANNON.Body.KINEMATIC){ b.body.type=CANNON.Body.DYNAMIC; b.body.mass=b.dynMass; b.body.velocity.set(0,0,0); b.body.updateMassProperties(); b.body.wakeUp(); } }
+  }
+  function drift(now){
+    const t=now*0.001;
+    for(const bs of bases){ if(bs.activated) continue;
+      const vx=bs.amp*bs.speed*Math.cos(t*bs.speed+bs.phase);
+      bs.body.velocity.set(vx,0,0); bs.cx=bs.body.position.x;
+      bs.mesh.position.x=bs.body.position.x; bs.cap.position.x=bs.body.position.x;
+    }
+    for(const b of bricks){ if(b.gone) continue; if(b.body.type===CANNON.Body.KINEMATIC){ const bs=bases[b.bi]; b.body.velocity.set(bs?bs.body.velocity.x:0,0,0); } }
+  }
   function buildLevel(){
     if(!scene) initScene();
     clearBricks(); clearBases(); clearPulse(); clearDeto(); clearParticles(); timeScale=1;
     const L=LEVELS[state.li];
-    let minX=1e9, maxX=-1e9, maxTop=0;
+    let minX=1e9, maxX=-1e9, maxTop=0, si=0;
     for(const st of L.structs){
-      const cx=st.x||0, cz=st.z||0, cells=shapeCells(st); const bs=buildBaseFor(cells,cx,cz); assignTypes(st,cells);
+      const cx=st.x||0, cz=st.z||0, cells=shapeCells(st); const bs=buildBaseFor(cells,cx,cz); const bi=bases.length-1; assignTypes(st,cells);
+      bs.amp = 1.1 + state.li*0.7; bs.speed = 0.5 + state.li*0.35; bs.phase = si*1.7;   // drift wider & faster each round
       for(const cell of cells){ const x=cx+cell.x, z=cz, y=baseTopY+BH/2+cell.row*(BH+0.004), sh=0.80+((cell.row*3+(cell.x*7|0))%5)*0.03;
         let color, rough=0.95, metal=0, mass=cell.row<2?3.2:1.9;
         if(cell.type==='corner'){ color=new THREE.Color(0x4a4652); rough=0.85; mass=6; }
@@ -261,10 +277,11 @@
         else color=new THREE.Color(sh*0.82,sh*0.67,sh*0.46);
         const mesh=new THREE.Mesh(new THREE.BoxGeometry(BW-0.03,BH-0.03,BD-0.03), new THREE.MeshStandardMaterial({color,roughness:rough,metalness:metal}));
         mesh.castShadow=mesh.receiveShadow=true; mesh.position.set(x,y,z); scene.add(mesh);
-        const body=new CANNON.Body({mass,shape:new CANNON.Box(new CANNON.Vec3((BW-0.03)/2,(BH-0.03)/2,(BD-0.03)/2))});
+        const body=new CANNON.Body({mass:0,type:CANNON.Body.KINEMATIC,shape:new CANNON.Box(new CANNON.Vec3((BW-0.03)/2,(BH-0.03)/2,(BD-0.03)/2))});
         body.position.set(x,y,z); body.linearDamping=0.2; body.angularDamping=0.4; body.allowSleep=true; body.sleepSpeedLimit=0.7; body.sleepTimeLimit=0.2; world.addBody(body);
-        bricks.push({mesh,body,gone:false,standing:true,type:cell.type,keyFired:false,goldScored:false,start:new THREE.Vector3(x,y,z)}); }
-      minX=Math.min(minX,cx-bs.halfX); maxX=Math.max(maxX,cx+bs.halfX); maxTop=Math.max(maxTop, baseTopY+(bs.maxRow+1)*BH);
+        bricks.push({mesh,body,gone:false,standing:true,type:cell.type,keyFired:false,goldScored:false,bi,dynMass:mass,start:new THREE.Vector3(x,y,z)}); }
+      minX=Math.min(minX,cx-bs.halfX-bs.amp); maxX=Math.max(maxX,cx+bs.halfX+bs.amp); maxTop=Math.max(maxTop, baseTopY+(bs.maxRow+1)*BH);
+      si++;
     }
     _cx=(minX+maxX)/2; _span=maxX-minX; _maxTop=maxTop; refit();   // frame the whole scene to the viewport
     state.combo=0;
@@ -333,6 +350,7 @@
         if(dist<=d.r){ d.hit.add(b);
           const fall=Math.pow(1-Math.min(1,dist/d.max),1.3), f=fall*(20+d.power*28)*(d.key?1.3:1);
           let hx=dx, hz=dz, hl=Math.hypot(hx,hz); if(hl<0.01){ hx=Math.random()-0.5; hz=Math.random()-0.5; hl=Math.hypot(hx,hz)||1; } hx/=hl; hz/=hl;
+          activate(b.bi);   // lock & release this structure into full physics
           b.body.wakeUp();
           b.body.applyImpulse(new CANNON.Vec3(hx*f, f*0.45+2, hz*f), new CANNON.Vec3(0,0,0));
           const s=f*0.35; b.body.angularVelocity.x+=(Math.random()-0.5)*s; b.body.angularVelocity.y+=(Math.random()-0.5)*s; b.body.angularVelocity.z+=(Math.random()-0.5)*s;
@@ -415,7 +433,7 @@
 
   let last=performance.now();
   function loop(now){ const dt=Math.min(0.033,(now-last)/1000); last=now;
-    if(world) world.step(1/60, dt*timeScale, 3);
+    if(world){ if(state.phase!=='won'&&state.phase!=='lost') drift(now); world.step(1/60, dt*timeScale, 3); }
     for(const b of bricks){ if(!b.gone){ b.mesh.position.copy(b.body.position); b.mesh.quaternion.copy(b.body.quaternion); } }
     if(pulse){ pulse.t=Math.min(1,pulse.t+dt*2.0);        // slow wave, visible crossing the wider gap
       for(const r of pulse.rings){ const pr=Math.max(0,Math.min(1,pulse.t-r.phase));
