@@ -540,7 +540,7 @@ export function mountChurches(app) {
 
   // Serve brand imagery (sunrise photos, app icon) for the website — e.g.
   // /assets/votd/votd-sunrise.jpg, /assets/brand/icon.png
-  app.use("/assets", express.static(ASSETS_DIR, { maxAge: "7d" }));
+  app.use("/assets", express.static(ASSETS_DIR, { maxAge: "7d", setHeaders: (res, p) => { if (p.endsWith(".html")) res.setHeader("Cache-Control", "no-store"); } }));
 
   // Weekly auto-processing: Mondays at 6:00 AM Central (after Sunday services are posted).
   if (cron.validate("0 6 * * 1")) {
