@@ -196,8 +196,8 @@
     if(!camera) return;
     const w=cv.clientWidth||900, h=cv.clientHeight||560, aspect=Math.max(0.4,w/h), t=Math.tan(camera.fov*Math.PI/360);
     // Smash-Fest framing: walls sit well up the frame at a distance; the camera rides high and looks down so there's open ground between the cannon and the walls.
-    const distW=(_span*0.58)/(t*aspect), distH=(_maxTop*0.50)/t;
-    const dist=Math.min(Math.max(distW, distH, 16), 22);
+    const distW=(_span*0.60)/(t*aspect), distH=(_maxTop*0.50)/t;
+    const dist=Math.max(distW, distH, 16);   // pull back far enough that the full drift always fits — no clipping off the sides on narrow phones
     LOOKAT.set(_cx,0.2,0);                                   // aim near ground level so the walls ride high, minimal sky
     const tgt=new THREE.Vector3(_cx,_maxTop*0.50+3,dist); camBase.copy(tgt); camTarget.copy(tgt);
     // Cannon anchored to the camera's view frame, not to a world height — so its small tip rests on the bottom edge of the screen at ANY aspect ratio (the vertical field of view is constant).
@@ -275,7 +275,7 @@
     let minX=1e9, maxX=-1e9, maxTop=0, si=0;
     for(const st of L.structs){
       const cx=st.x||0, cz=st.z||0, cells=shapeCells(st); const bs=buildBaseFor(cells,cx,cz); const bi=bases.length-1; assignTypes(st,cells);
-      bs.amp = 0.6 + state.li*0.3; bs.speed = 0.4 + state.li*0.18; bs.phase = 0;   // all structures drift in sync so they keep a constant gap and never overlap
+      bs.amp = 0.45 + state.li*0.22; bs.speed = 0.4 + state.li*0.18; bs.phase = 0;   // gentle in-sync drift; constant gap, never overlap
       for(const cell of cells){ const x=cx+cell.x, z=cz, y=baseTopY+BH/2+cell.row*(BH+0.004), sh=0.80+((cell.row*3+(cell.x*7|0))%5)*0.03;
         let color, rough=0.95, metal=0, mass=cell.row<2?3.2:1.9;
         if(cell.type==='corner'){ color=new THREE.Color(0x4a4652); rough=0.85; mass=6; }
