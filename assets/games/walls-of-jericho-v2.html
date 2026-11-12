@@ -1,0 +1,495 @@
+<title>Walls of Jericho</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=Inter:wght@400;500;600&display=swap">
+<style>
+  /* Single-screen 3D game: stone-tablet HUD over a Three.js dusk scene. Committed dusk look; chrome colors explicit. */
+  :root{ --ink:#f3e9d6; --ink-dim:#c9b79a; --gold:#e9c55c; --panel-edge:#3a2f45; --danger:#e07a5f; color-scheme:dark; }
+  html,body{height:100%}
+  body{
+    margin:0; background:radial-gradient(120% 90% at 50% -10%, #2d2142 0%, #171320 70%);
+    color:var(--ink); font-family:Inter,system-ui,sans-serif;
+    display:flex; align-items:stretch; justify-content:center;
+    padding-left:max(16px,env(safe-area-inset-left,0px)); padding-right:max(16px,env(safe-area-inset-right,0px));
+    padding-block:16px; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+  }
+  .stage{width:100%; max-width:900px; height:100%; display:flex; flex-direction:column; gap:10px; min-height:0}
+  .hud{display:flex; align-items:center; gap:10px; justify-content:space-between;
+    background:linear-gradient(180deg,#241d31,#1a1524); border:1px solid var(--panel-edge); border-radius:12px; padding:9px 12px}
+  .hud .day{font-family:Cinzel,serif; font-weight:700; letter-spacing:.04em; font-size:clamp(14px,2.4vw,18px); white-space:nowrap}
+  .hud .day small{display:block; font-family:Inter; font-weight:500; letter-spacing:.14em; text-transform:uppercase; font-size:10px; color:var(--gold); opacity:.85}
+  .horns{display:flex; gap:4px; flex-wrap:wrap; justify-content:center; flex:1}
+  .horn{font-size:clamp(15px,3vw,20px); transition:opacity .2s, transform .2s}
+  .horn.used{opacity:.22; transform:translateY(1px) scale(.9)}
+  .tools{display:flex; gap:6px}
+  .tools button{background:#2a2235; color:var(--ink); border:1px solid var(--panel-edge); border-radius:9px; width:36px; height:36px; font-size:16px; cursor:pointer; display:grid; place-items:center}
+  .tools button:hover{border-color:var(--gold)} .tools button:focus-visible{outline:2px solid var(--gold); outline-offset:2px}
+  .frame{position:relative; width:100%; flex:1; min-height:0; border-radius:14px; overflow:hidden; border:1px solid #42324a; box-shadow:0 18px 40px -20px #000, inset 0 0 0 1px #ffffff0a}
+  canvas{display:block; width:100%; height:100%; touch-action:none}
+  .standing{display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:13px; color:var(--ink-dim); padding:0 4px}
+  .standing b{color:var(--gold)}
+  .meter{height:7px; flex:1; max-width:300px; background:#2a2235; border-radius:99px; overflow:hidden; border:1px solid #39304a}
+  .meter > i{display:block; height:100%; width:100%; background:linear-gradient(90deg,var(--danger),var(--gold)); transition:width .3s ease}
+  .score{font-variant-numeric:tabular-nums}
+  .blastText{position:absolute; left:50%; top:30%; transform:translate(-50%,-50%) scale(.8); font-family:Cinzel,serif; font-weight:900;
+    font-size:clamp(20px,5vw,34px); color:var(--gold); text-shadow:0 2px 20px #e9c55c88,0 0 2px #000; opacity:0; pointer-events:none; transition:opacity .25s, transform .25s}
+  .blastText.show{opacity:1; transform:translate(-50%,-50%) scale(1)}
+  .overlay{position:absolute; inset:0; display:none; place-items:center; text-align:center; background:radial-gradient(90% 90% at 50% 40%, #140f1dcc, #0b0810ee); padding:22px; backdrop-filter:blur(2px)}
+  .overlay.show{display:grid}
+  .card{max-width:460px; display:flex; flex-direction:column; gap:12px; align-items:center}
+  .stars{font-size:30px; letter-spacing:6px; color:var(--gold)}
+  .stars .off{color:#4a3f55}
+  .card h2{font-family:Cinzel,serif; margin:0; font-size:clamp(22px,5vw,34px); color:var(--gold); letter-spacing:.02em; text-wrap:balance}
+  .verse{font-size:17.5px; line-height:1.6; font-style:italic; text-wrap:pretty}
+  .verse cite{display:block; margin-top:7px; font-style:normal; font-size:13px; letter-spacing:.14em; text-transform:uppercase; color:var(--gold); opacity:.85}
+  .card p{margin:0; color:var(--ink-dim); font-size:14px}
+  .btn{font-family:Cinzel,serif; font-weight:700; letter-spacing:.03em; cursor:pointer; background:linear-gradient(180deg,#f0cf66,#d7a93f); color:#2a1c06; border:0; border-radius:11px; padding:12px 26px; font-size:16px; box-shadow:0 8px 20px -8px #e9c55c88}
+  .btn:hover{filter:brightness(1.06)} .btn:focus-visible{outline:2px solid #fff; outline-offset:2px}
+  .hint{position:absolute; left:50%; bottom:12px; transform:translateX(-50%); background:#120d1cd9; border:1px solid #4a3a52; color:var(--ink); padding:8px 14px; border-radius:10px; font-size:12.5px; max-width:90%; text-align:center; transition:opacity .5s; pointer-events:none}
+  .credit{text-align:center; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:#8f84a3}
+</style>
+
+<div class="stage">
+  <div class="hud">
+    <div class="day" id="dayLabel">Day 1<small>Jericho</small></div>
+    <div class="horns" id="horns" aria-label="Blasts remaining"></div>
+    <div class="tools">
+      <button id="hintBtn" title="Highlight stones still on a platform" aria-label="Hint">💡</button>
+      <button id="muteBtn" title="Sound on/off" aria-label="Toggle sound">🔊</button>
+      <button id="resetBtn" title="Restart this wall" aria-label="Restart level">↻</button>
+    </div>
+  </div>
+  <div class="frame">
+    <canvas id="c" width="900" height="560" aria-label="Walls of Jericho 3D game"></canvas>
+    <div class="blastText" id="blastText"></div>
+    <div class="hint" id="hint">Aim at the wall · hold to grow the blast · release to shout.</div>
+    <div class="overlay" id="overlay">
+      <div class="card">
+        <div class="stars" id="ovStars" hidden></div>
+        <h2 id="ovTitle">The wall is fallen!</h2>
+        <div class="verse" id="ovVerse"></div>
+        <p id="ovNote"></p>
+        <button class="btn" id="ovBtn">Next</button>
+      </div>
+    </div>
+  </div>
+  <div class="standing">
+    <span>On platform: <b id="standCount">—</b></span>
+    <span class="meter"><i id="standBar"></i></span>
+    <span class="score">Score: <b id="scoreVal">0</b></span>
+  </div>
+  <div class="credit">A Bible Study Genius game · prototype</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+<script>
+(function(){
+  const W=900, H=560;
+  const HORN=new THREE.Vector3(0,0.5,22);
+  const LEVELS=[
+    { day:'Day 1', blasts:20, par:15, verse:'“You shall march around the city... the wall of the city will fall down flat.”', cite:'Joshua 6:3–5 (WEB)',
+      structs:[ {shape:'wall',cols:4,rows:9,x:-2.8}, {shape:'wall',cols:4,rows:9,x:2.8} ] },
+    { day:'Day 4', blasts:18, par:14, verse:'“Behold, I have given Jericho into your hand, with its king and the mighty men of valor.”', cite:'Joshua 6:2 (WEB)',
+      structs:[ {shape:'gate',x:0} ] },
+    { day:'Day 7', blasts:28, par:22, verse:'“The people shouted, and the priests blew the trumpets... the wall fell down flat, and they took the city.”', cite:'Joshua 6:20 (WEB)',
+      structs:[ {shape:'wall',cols:4,rows:11,x:-2.8}, {shape:'wall',cols:4,rows:11,x:2.8} ] },
+  ];
+  // Each shape returns grid cells {x: world-x of brick center, row: 0=bottom} placed on the base.
+  function shapeCells(L){
+    const a=[];
+    if(L.shape==='ziggurat'){ let w=L.baseCols, r=0; while(w>=1){ for(let c=0;c<w;c++) a.push({x:(c-(w-1)/2)*BW,row:r}); w-=2; r++; } }
+    else if(L.shape==='gate'){ const P=(x,row)=>a.push({x:x*BW,row});
+      for(let r=0;r<8;r++) [-2.5,-1.5,1.5,2.5].forEach(x=>P(x,r));   // two towers, central doorway
+      [-2.5,-1.5,-0.5,0.5,1.5,2.5].forEach(x=>P(x,8));               // lintel across the top
+      [-2.5,-0.5,1.5].forEach(x=>P(x,9)); }                          // battlements
+    else { for(let r=0;r<L.rows;r++) for(let c=0;c<L.cols;c++) a.push({x:(c-(L.cols-1)/2)*BW,row:r}); }
+    return a;
+  }
+  // Tag special stones: corners (heavy anchors), keystones (weak points that chain-collapse), one treasure.
+  function assignTypes(st,cells){
+    let maxRow=0,minX=1e9,maxX=-1e9; for(const c of cells){ c.type='normal'; maxRow=Math.max(maxRow,c.row); minX=Math.min(minX,c.x); maxX=Math.max(maxX,c.x); }
+    for(const c of cells){ if(c.row===0 && (c.x===minX||c.x===maxX)) c.type='corner'; }
+    // Spread keystones across the whole structure: left / centre / right on every other row.
+    const li=state.li, rowStep=2+li;   // plenty of pink keystones to chain-explode, fewer each round
+    for(let r=1;r<maxRow;r+=rowStep){ const rc=cells.filter(c=>c.row===r).sort((a,b)=>a.x-b.x); if(!rc.length) continue;
+      const picks = li<=0 ? [rc[0], rc[(rc.length/2)|0], rc[rc.length-1]] : li===1 ? [rc[0], rc[rc.length-1]] : [rc[(rc.length/2)|0]];
+      for(const c of picks) if(c.type==='normal') c.type='key'; }
+    if(st.shape==='gate'){ for(const c of cells){ if(c.row===8 && Math.abs(c.x)<=0.5*BW+0.01 && c.type==='normal') c.type='key'; } } // doorway keystone
+    const top=cells.filter(c=>c.row===maxRow); if(top.length){ const g=top[(top.length/2)|0]; if(g.type!=='corner') g.type='gold'; }
+  }
+  const BW=1.0, BH=0.55, BD=0.72;
+  const cv=document.getElementById('c');
+
+  let renderer, scene, camera, world, camBase, camTarget, _span=10, _maxTop=6, _cx=0;
+  let bricks=[], particles=[], pulse=null, detos=[], previewSphere, reticle, horn, dais, flashLight;
+  let bases=[], baseTopY=1.3;
+  let LOOKAT=new THREE.Vector3(0,2.6,0);
+  let aim=new THREE.Vector3(0,1.8,0), initialOnBase=1, shake=0, timeScale=1, MUZZLE=new THREE.Vector3(), hintUntil=0, standNow=1;
+  let state={ li:0, blasts:0, canFire:false, phase:'ready', score:0, standBefore:0 };
+  let charging=false, downAt=0;
+  const raycaster=new THREE.Raycaster();
+  const aimPlane=new THREE.Plane(new THREE.Vector3(0,0,1), -0.36);
+
+  // Audio
+  let ac=null, muted=false;
+  function audio(){ if(!ac){ try{ ac=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } return ac; }
+  function tone(type,f0,f1,dur,vol){ if(muted)return; const a=audio(); if(!a)return;
+    const o=a.createOscillator(),g=a.createGain(),t=a.currentTime; o.type=type; o.frequency.setValueAtTime(f0,t);
+    if(f1)o.frequency.exponentialRampToValueAtTime(f1,t+dur); g.gain.setValueAtTime(0.0001,t);
+    g.gain.exponentialRampToValueAtTime(vol,t+0.02); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.connect(g).connect(a.destination); o.start(t); o.stop(t+dur+0.02); }
+  function noiseBurst(dur,vol){ if(muted)return; const a=audio(); if(!a)return;
+    const n=a.sampleRate*dur, buf=a.createBuffer(1,n,a.sampleRate), d=buf.getChannelData(0);
+    for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*(1-i/n); const s=a.createBufferSource(); s.buffer=buf;
+    const g=a.createGain(); g.gain.setValueAtTime(vol,a.currentTime); g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+dur);
+    const f=a.createBiquadFilter(); f.type='lowpass'; f.frequency.value=900; s.connect(f).connect(g).connect(a.destination); s.start(); }
+  const hornS=()=>{ tone('sawtooth',150,240,0.3,0.2); setTimeout(()=>tone('sawtooth',110,150,0.25,0.12),50); };
+  const boomS=(p)=>{ tone('sine',70,34,0.5,0.35+p*0.1); noiseBurst(0.4,0.3); };
+  const rubbleS=()=>{ for(let i=0;i<6;i++) setTimeout(()=>{tone('triangle',90-i*7,36,0.18,0.12); noiseBurst(0.15,0.1);}, i*95); };
+  function shoutS(){ noiseBurst(0.75,0.3); tone('sawtooth',130,330,0.6,0.22); setTimeout(()=>tone('sine',70,32,0.7,0.3),40); }
+
+  function initScene(){
+    renderer=new THREE.WebGLRenderer({canvas:cv, antialias:true});
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+    renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+    renderer.outputEncoding=THREE.sRGBEncoding; renderer.toneMapping=THREE.ACESFilmicToneMapping; renderer.toneMappingExposure=1.15;
+
+    scene=new THREE.Scene(); scene.background=duskTexture(); scene.fog=new THREE.Fog(0x7a4b53,24,52);
+    camera=new THREE.PerspectiveCamera(50,W/H,0.1,200);
+    camBase=new THREE.Vector3(5,7,22.5); camTarget=camBase.clone(); camera.position.copy(camBase);
+
+    scene.add(new THREE.HemisphereLight(0xffe4b0,0x3a2435,0.7));
+    const sun=new THREE.DirectionalLight(0xffd9a0,1.25); sun.position.set(-8,15,9); sun.castShadow=true;
+    sun.shadow.mapSize.set(1024,1024); const s=14;
+    Object.assign(sun.shadow.camera,{left:-s,right:s,top:s,bottom:-s,near:1,far:50}); sun.shadow.camera.updateProjectionMatrix();
+    scene.add(sun);
+    const rim=new THREE.DirectionalLight(0xff8a5a,0.5); rim.position.set(10,4,-6); scene.add(rim);
+    flashLight=new THREE.PointLight(0xffe6a0,0,20,2); scene.add(flashLight);
+
+    const ground=new THREE.Mesh(new THREE.PlaneGeometry(140,140), new THREE.MeshStandardMaterial({color:0xbf9560,roughness:1}));
+    ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; scene.add(ground);
+
+    const cityMat=new THREE.MeshStandardMaterial({color:0x4f3346,roughness:1});
+    for(let i=0;i<18;i++){ const x=-48+i*6, h=3+((i*7)%6);   // a far skyline behind the walls, not foreground clutter
+      const m=new THREE.Mesh(new THREE.BoxGeometry(3.5,h,3.5),cityMat); m.position.set(x,h/2,-34-((i*5)%7)); scene.add(m); }
+
+    horn=new THREE.Group(); horn.add(buildShofar()); horn.position.copy(HORN); horn.scale.setScalar(1.9);  // large, foreground
+    const aimDir=new THREE.Vector3(0,3.4,0).sub(HORN).normalize();     // aim the bell up toward the walls
+    horn.quaternion.setFromUnitVectors(new THREE.Vector3(1,0,0), aimDir);
+    scene.add(horn);
+    dais=null;   // no pedestal — the shofar reads as a handheld horn, keeps the foreground clean
+
+    reticle=new THREE.Mesh(new THREE.RingGeometry(0.26,0.36,24), new THREE.MeshBasicMaterial({color:0xe9c55c,side:THREE.DoubleSide,transparent:true,opacity:0.9}));
+    scene.add(reticle);
+    previewSphere=new THREE.Mesh(new THREE.SphereGeometry(1,20,14), new THREE.MeshBasicMaterial({color:0xffe08a,transparent:true,opacity:0.14,blending:THREE.AdditiveBlending,depthWrite:false}));
+    previewSphere.visible=false; scene.add(previewSphere);
+
+    world=new CANNON.World(); world.gravity.set(0,-12,0); world.broadphase=new CANNON.NaiveBroadphase();
+    world.solver.iterations=22; world.solver.tolerance=0.001; world.allowSleep=true;
+    world.defaultContactMaterial.friction=0.42; world.defaultContactMaterial.restitution=0.0;
+    world.defaultContactMaterial.contactEquationStiffness=1e6; world.defaultContactMaterial.contactEquationRelaxation=3;
+    const gb=new CANNON.Body({mass:0,shape:new CANNON.Plane()}); gb.quaternion.setFromAxisAngle(new CANNON.Vec3(1,0,0),-Math.PI/2); world.addBody(gb);
+    resize(); window.addEventListener('resize',resize); window.addEventListener('orientationchange',()=>setTimeout(resize,250));
+  }
+  // Fit the camera so the whole scene fills the viewport at any aspect (portrait phone, landscape, desktop).
+  function refit(){
+    if(!camera) return;
+    const w=cv.clientWidth||900, h=cv.clientHeight||560, aspect=Math.max(0.4,w/h), t=Math.tan(camera.fov*Math.PI/360);
+    // Smash-Fest framing: walls sit well up the frame at a distance; the camera rides high and looks down so there's open ground between the cannon and the walls.
+    const distW=(_span*0.58)/(t*aspect), distH=(_maxTop*0.50)/t;
+    const dist=Math.min(Math.max(distW, distH, 16), 22);
+    LOOKAT.set(_cx,0.2,0);                                   // aim near ground level so the walls ride high, minimal sky
+    const tgt=new THREE.Vector3(_cx,_maxTop*0.50+3,dist); camBase.copy(tgt); camTarget.copy(tgt);
+    // Cannon anchored to the camera's view frame, not to a world height — so its small tip rests on the bottom edge of the screen at ANY aspect ratio (the vertical field of view is constant).
+    const halfV=camera.fov*Math.PI/360;
+    const fwd=new THREE.Vector3().subVectors(LOOKAT,tgt).normalize();
+    const right=new THREE.Vector3().crossVectors(fwd,new THREE.Vector3(0,1,0)).normalize();
+    const up=new THREE.Vector3().crossVectors(right,fwd).normalize();
+    const Dh=7;                                              // horn distance in front of the camera (fixes its on-screen size)
+    HORN.copy(tgt).addScaledVector(fwd,Dh).addScaledVector(up,-Dh*Math.tan(halfV)+0.35);   // bottom-centre of the frame, raised just enough that the tip lands on the edge
+    if(horn){ horn.position.copy(HORN); horn.scale.setScalar(0.72); }
+    if(dais){ dais.position.set(HORN.x, 0.2, HORN.z); }
+  }
+  function resize(){
+    if(!renderer||!camera) return;
+    const w=cv.clientWidth||900, h=cv.clientHeight||560;
+    renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); refit();
+  }
+  function duskTexture(){ const c=document.createElement('canvas'); c.width=16; c.height=256; const x=c.getContext('2d');
+    const g=x.createLinearGradient(0,0,0,256); g.addColorStop(0,'#241a3a'); g.addColorStop(0.5,'#6b3f52'); g.addColorStop(0.8,'#b06a45'); g.addColorStop(1,'#d68a4e');
+    x.fillStyle=g; x.fillRect(0,0,16,256); const t=new THREE.CanvasTexture(c); t.magFilter=THREE.LinearFilter; return t; }
+
+  // A golden ram's horn (shofar): tapered curve with a belly, ending level so the flared bell faces forward (the wall). Built along +X.
+  function buildShofar(){
+    const g=new THREE.Group(), Z=new THREE.Vector3(0,0,1), up=new THREE.Vector3(0,1,0);
+    const pts=[ new THREE.Vector3(-0.1,0.08,0), new THREE.Vector3(0.35,-0.1,0), new THREE.Vector3(0.85,-0.15,0),
+                new THREE.Vector3(1.3,-0.09,0), new THREE.Vector3(1.7,-0.01,0), new THREE.Vector3(2.08,0.03,0) ];
+    const curve=new THREE.CatmullRomCurve3(pts);
+    const N=30, rad=(t)=>0.05+Math.pow(t,2.3)*0.55;
+    const gold=new THREE.MeshStandardMaterial({color:0xe3b73f, roughness:0.28, metalness:0.9});
+    const goldLt=new THREE.MeshStandardMaterial({color:0xf2d873, roughness:0.3, metalness:0.9});
+    for(let i=0;i<N;i++){ const t0=i/N,t1=(i+1)/N,p0=curve.getPoint(t0),p1=curve.getPoint(t1);
+      const dir=new THREE.Vector3().subVectors(p1,p0),len=dir.length(); dir.normalize();
+      const seg=new THREE.Mesh(new THREE.CylinderGeometry(rad(t1),rad(t0),len*1.08,18),gold);
+      seg.castShadow=true; seg.position.copy(p0).addScaledVector(dir,len*0.5); seg.quaternion.setFromUnitVectors(up,dir); g.add(seg); }
+    const rim=new THREE.Mesh(new THREE.TorusGeometry(0.56,0.07,14,30), goldLt);   // flared bell mouth faces forward
+    rim.position.copy(curve.getPoint(1)); rim.quaternion.setFromUnitVectors(Z,curve.getTangent(1)); rim.castShadow=true; g.add(rim);
+    for(let k=0.3;k<0.92;k+=0.17){ const pp=curve.getPoint(k);
+      const ring=new THREE.Mesh(new THREE.TorusGeometry(rad(k)+0.02,0.025,8,20), goldLt);
+      ring.position.copy(pp); ring.quaternion.setFromUnitVectors(Z,curve.getTangent(k)); g.add(ring); }
+    const mp=new THREE.Mesh(new THREE.TorusGeometry(0.09,0.03,8,16), new THREE.MeshStandardMaterial({color:0xb8860b,roughness:0.35,metalness:0.9}));
+    mp.position.copy(curve.getPoint(0)); mp.quaternion.setFromUnitVectors(Z,curve.getTangent(0)); g.add(mp);
+    return g;
+  }
+
+  function clearBricks(){ for(const b of bricks){ scene.remove(b.mesh); world.remove(b.body); } bricks=[]; }
+  function clearBases(){ for(const bs of bases){ scene.remove(bs.mesh); scene.remove(bs.cap); world.remove(bs.body); } bases=[]; }
+  function buildBaseFor(cells,cx,cz){
+    let maxAbsX=0, maxRow=0; for(const c of cells){ maxAbsX=Math.max(maxAbsX,Math.abs(c.x)); maxRow=Math.max(maxRow,c.row); }
+    const halfX=maxAbsX+BW/2+0.45, halfZ=BD/2+0.5, topY=baseTopY;
+    const mesh=new THREE.Mesh(new THREE.BoxGeometry(halfX*2,topY,halfZ*2), new THREE.MeshStandardMaterial({color:0x5f5866,roughness:0.95}));
+    mesh.position.set(cx,topY/2,cz); mesh.castShadow=mesh.receiveShadow=true; scene.add(mesh);
+    const cap=new THREE.Mesh(new THREE.BoxGeometry(halfX*2+0.12,0.1,halfZ*2+0.12), new THREE.MeshStandardMaterial({color:0x8c7a5a,roughness:0.9}));
+    cap.position.set(cx,topY+0.02,cz); cap.receiveShadow=true; scene.add(cap);
+    const body=new CANNON.Body({mass:0,type:CANNON.Body.KINEMATIC,shape:new CANNON.Box(new CANNON.Vec3(halfX,topY/2,halfZ))});
+    body.allowSleep=false; body.position.set(cx,topY/2,cz); world.addBody(body);
+    const bs={mesh,cap,body,cx,cz,cx0:cx,halfX,halfZ,topY,maxRow,amp:0,speed:0,phase:0,activated:false}; bases.push(bs); return bs;
+  }
+  function onAnyBase(p){ for(const bs of bases){ if(Math.abs(p.x-bs.cx)<=bs.halfX+0.05 && Math.abs(p.z-bs.cz)<=bs.halfZ+0.05 && p.y>bs.topY-0.1) return true; } return false; }
+  // A blast knocks individual blocks loose: a struck block turns dynamic and flies off. Unstruck blocks stay pinned to the base and keep drifting — the wall never stops moving.
+  function freeBrick(b){ if(b.body.type===CANNON.Body.KINEMATIC){ b.body.type=CANNON.Body.DYNAMIC; b.body.mass=b.dynMass; b.body.allowSleep=true; b.body.updateMassProperties(); b.body.wakeUp(); } }
+  function drift(now){
+    const t=now*0.001;
+    for(const bs of bases){                                 // every base keeps drifting the whole round
+      const vx=bs.amp*bs.speed*Math.cos(t*bs.speed+bs.phase);
+      bs.body.velocity.set(vx,0,0); bs.cx=bs.body.position.x;
+      bs.mesh.position.x=bs.body.position.x; bs.cap.position.x=bs.body.position.x;
+    }
+    // pinned blocks ride their base; knocked-loose (dynamic) blocks are free and get shoved aside by the moving base.
+    for(const b of bricks){ if(b.gone) continue; if(b.body.type===CANNON.Body.KINEMATIC){ const bs=bases[b.bi]; b.body.velocity.set(bs?bs.body.velocity.x:0,0,0); } }
+  }
+  function buildLevel(){
+    if(!scene) initScene();
+    clearBricks(); clearBases(); clearPulse(); clearDeto(); clearParticles(); timeScale=1;
+    const L=LEVELS[state.li];
+    let minX=1e9, maxX=-1e9, maxTop=0, si=0;
+    for(const st of L.structs){
+      const cx=st.x||0, cz=st.z||0, cells=shapeCells(st); const bs=buildBaseFor(cells,cx,cz); const bi=bases.length-1; assignTypes(st,cells);
+      bs.amp = 0.6 + state.li*0.3; bs.speed = 0.4 + state.li*0.18; bs.phase = 0;   // all structures drift in sync so they keep a constant gap and never overlap
+      for(const cell of cells){ const x=cx+cell.x, z=cz, y=baseTopY+BH/2+cell.row*(BH+0.004), sh=0.80+((cell.row*3+(cell.x*7|0))%5)*0.03;
+        let color, rough=0.95, metal=0, mass=cell.row<2?3.2:1.9;
+        if(cell.type==='corner'){ color=new THREE.Color(0x4a4652); rough=0.85; mass=6; }
+        else if(cell.type==='key'){ color=new THREE.Color(0x2a0014); mass=1.3; }   // dark base; pink comes from emissive
+        else if(cell.type==='gold'){ color=new THREE.Color(0xcaa33a); rough=0.4; metal=0.6; mass=1.9; }
+        else color=new THREE.Color(sh*0.82,sh*0.67,sh*0.46);
+        const mesh=new THREE.Mesh(new THREE.BoxGeometry(BW-0.03,BH-0.03,BD-0.03), new THREE.MeshStandardMaterial({color,roughness:rough,metalness:metal}));
+        mesh.castShadow=mesh.receiveShadow=true; mesh.position.set(x,y,z); scene.add(mesh);
+        const body=new CANNON.Body({mass:0,type:CANNON.Body.KINEMATIC,shape:new CANNON.Box(new CANNON.Vec3((BW-0.03)/2,(BH-0.03)/2,(BD-0.03)/2))});
+        body.position.set(x,y,z); body.linearDamping=0.2; body.angularDamping=0.4; body.allowSleep=false; body.sleepSpeedLimit=0.7; body.sleepTimeLimit=0.2; world.addBody(body);
+        bricks.push({mesh,body,gone:false,standing:true,type:cell.type,keyFired:false,goldScored:false,bi,dynMass:mass,gx:Math.round(cell.x/BW*2),gy:cell.row,start:new THREE.Vector3(x,y,z)}); }
+      minX=Math.min(minX,cx-bs.halfX-bs.amp); maxX=Math.max(maxX,cx+bs.halfX+bs.amp); maxTop=Math.max(maxTop, baseTopY+(bs.maxRow+1)*BH);
+      si++;
+    }
+    _cx=(minX+maxX)/2; _span=maxX-minX; _maxTop=maxTop; refit();   // frame the whole scene to the viewport
+    state.combo=0;
+    initialOnBase=countOnBase();
+    state.blasts=L.blasts; state.canFire=true; state.phase='ready';
+    document.getElementById('dayLabel').innerHTML=L.day+'<small>Jericho</small>';
+    drawHorns(); updateStanding(); updateScore(); hideOverlay(); showHint('Clear every structure off its platform · hit red keystones to chain-collapse sections for big combos · your last shout is the mighty one.');
+  }
+
+  // A stone counts until it is knocked clear OFF the platform. Rubble left on the platform still counts
+  // (and glows), so the wall is "fallen" only when every stone is off.
+  function countOnBase(){ let n=0; for(const b of bricks){ if(b.gone)continue; const p=b.body.position;
+    if(p.y<-4){ b.gone=true; b.standing=false; continue; }
+    b.standing=(b.body.type===CANNON.Body.KINEMATIC); if(b.standing) n++; } return n; }  // still pinned to the wall = standing; once knocked loose it no longer counts
+  function updateStanding(){ const n=countOnBase(); standNow=n;
+    document.getElementById('standCount').textContent=n;
+    document.getElementById('standBar').style.width=(100*n/Math.max(1,initialOnBase))+'%';
+    return n; }
+  // Per-frame glow: keystones always pink; remaining stones glow gold, and PULSE brightly when hinting or when few remain.
+  function updateGlow(now){
+    const hinting = now<hintUntil || (standNow>0 && standNow<=5);
+    const pulse = 0.5+0.7*Math.abs(Math.sin(now*0.006));
+    for(const b of bricks){ if(b.gone||!b.mesh) continue; const m=b.mesh.material;
+      if(b.type==='key' && !b.keyFired){ m.emissive.setHex(0xff1493); m.emissiveIntensity=2.0; }
+      else if(b.standing){ m.emissive.setHex(hinting?0xffd24a:0x4a3410); m.emissiveIntensity=hinting?pulse:0.3; }
+      else { m.emissive.setHex(0x000000); m.emissiveIntensity=0; } }
+  }
+  function updateScore(){ document.getElementById('scoreVal').textContent=state.score; }
+
+  // ---- Shockwave ----
+  function previewRadius(power){ return 1.0+power*1.0; }   // always catches a cluster — every blast frees 2+ blocks
+  function startPulse(target,power){
+    const isFinal = state.blasts===1;   // the last blast is the great seventh shout
+    state.canFire=false; state.phase='pulsing'; state.standBefore=countOnBase(); state.blasts--; drawHorns(); hornS(); hideHint();
+    aimHorn(target); const from=MUZZLE.clone();                         // emit from the bell opening
+    const dir=new THREE.Vector3().subVectors(target,from).normalize();
+    const col=isFinal?0xfff0b0:0xffe6a0, rings=[], nr=isFinal?6:4;
+    for(let i=0;i<nr;i++){ const m=new THREE.Mesh(new THREE.TorusGeometry(isFinal?0.7:0.5,0.05,10,30),
+        new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+      m.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1),dir); m.visible=false; scene.add(m); rings.push({m,phase:i*0.12}); }
+    pulse={rings,from,to:target.clone(),dir,t:0,power,isFinal};
+  }
+  function clearPulse(){ if(pulse){ for(const r of pulse.rings) scene.remove(r.m); pulse=null; } }
+  function detonate(center,power,opts){
+    opts=opts||{};
+    const center2=center.clone(); if(!opts.key) center2.z+=0.25;
+    const col=opts.key?0xff5a2a:(opts.final?0xfff0b0:0xffe6a0);
+    const d={ center:center2, r:0, power:power*(opts.final?1.6:1), age:0, hit:new Set(), key:!!opts.key, nochain:!!opts.nochain,
+      max:(opts.key?1.6:previewRadius(power))*(opts.final?1.7:1)+0.2 };
+    const sphere=new THREE.Mesh(new THREE.SphereGeometry(1,24,18), new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.4,blending:THREE.AdditiveBlending,depthWrite:false}));
+    const ring=new THREE.Mesh(new THREE.TorusGeometry(1,0.06,10,40), new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.85,blending:THREE.AdditiveBlending,depthWrite:false}));
+    sphere.position.copy(center2); ring.position.copy(center2); scene.add(sphere); scene.add(ring); d.sphere=sphere; d.ring=ring;
+    flashLight.position.copy(center2); flashLight.intensity=opts.final?72:38;
+    shake=Math.min(0.75, shake+(opts.final?0.5:0.22)+power*0.2);
+    if(opts.final){ shoutS(); blastText('THE SEVENTH SHOUT!'); } else if(opts.key){ tone('square',220,70,0.22,0.2); } else boomS(power);
+    burst(center2,(opts.final?34:14)+power*14);
+    detos.push(d); state.phase='blasting';
+  }
+  function stepDeto(dt){
+    if(!detos.length) return;
+    const chain=[];
+    for(const d of detos){
+      d.r=Math.min(d.max, d.r+(d.key?16:10)*dt); d.age+=dt;
+      for(const b of bricks){ if(b.gone||d.hit.has(b)) continue;
+        const p=b.body.position, dx=p.x-d.center.x, dy=p.y-d.center.y, dz=p.z-d.center.z, dist=Math.hypot(dx,dy,dz);
+        if(dist<=d.r){ d.hit.add(b);
+          const fall=Math.pow(1-Math.min(1,dist/d.max),1.1), f=fall*(24+d.power*26)*(d.key?1.2:1);
+          let hx=dx, hl=Math.abs(hx)||1; hx/=hl;   // only the sideways sign of the radial direction
+          freeBrick(b);   // knock this block loose from the wall
+          // Every freed block gets a guaranteed shove — mostly backward (into the screen, away from the horn) and up — so it flies off, not just the edges.
+          b.body.applyImpulse(new CANNON.Vec3(hx*f*0.35, f*0.5+3, -(f*0.7)), new CANNON.Vec3(0,0,0));
+          const s=f*0.3; b.body.angularVelocity.x+=(Math.random()-0.5)*s; b.body.angularVelocity.y+=(Math.random()-0.5)*s; b.body.angularVelocity.z+=(Math.random()-0.5)*s;
+          if(b.type==='key' && !b.keyFired && !d.nochain){ b.keyFired=true; b.mesh.material.emissive.setHex(0x000000); chain.push(new THREE.Vector3(p.x,p.y,p.z)); }
+        }
+      }
+      d.sphere.scale.setScalar(d.r); d.ring.scale.setScalar(d.r); d.ring.lookAt(camera.position);
+      const fade=Math.max(0,1-d.r/d.max); d.sphere.material.opacity=0.4*fade; d.ring.material.opacity=0.85*fade;
+    }
+    flashLight.intensity*=0.82;
+    for(let i=detos.length-1;i>=0;i--){ const d=detos[i]; if(d.r>=d.max && d.age>0.22){ scene.remove(d.sphere); scene.remove(d.ring); detos.splice(i,1); } }
+    for(const pos of chain) detonate(pos, 0.7, {key:true, nochain:true});   // a struck keystone explodes and pops nearby blocks, but doesn't ripple across the whole wall
+    if(detos.length===0) flashLight.intensity=0;
+  }
+  function clearDeto(){ for(const d of detos){ scene.remove(d.sphere); scene.remove(d.ring); } detos=[]; flashLight.intensity=0; }
+
+  // Any pinned block no longer connected down to the base (floating after a hole is blown) gets released and falls.
+  function supportPass(){
+    const byBase={};
+    for(const b of bricks){ if(b.gone||b.body.type!==CANNON.Body.KINEMATIC) continue; (byBase[b.bi]=byBase[b.bi]||[]).push(b); }
+    for(const bi in byBase){ const list=byBase[bi], present=new Map();
+      for(const b of list) present.set(b.gx+','+b.gy, b);
+      const grounded=new Set(), q=[];
+      for(const b of list){ if(b.gy===0){ grounded.add(b.gx+','+b.gy); q.push(b); } }   // resting on the base
+      while(q.length){ const b=q.pop();
+        for(const [nx,ny] of [[b.gx,b.gy+1],[b.gx,b.gy-1],[b.gx+2,b.gy],[b.gx-2,b.gy]]){ const k=nx+','+ny;
+          if(present.has(k)&&!grounded.has(k)){ grounded.add(k); q.push(present.get(k)); } } }
+      for(const b of list){ if(!grounded.has(b.gx+','+b.gy)){ freeBrick(b); b.body.applyImpulse(new CANNON.Vec3((Math.random()-0.5)*2,0,-1),new CANNON.Vec3(0,0,0)); } }
+    }
+  }
+  function resolveShot(){
+    supportPass();   // drop any block left hanging unsupported by the blast
+    const after=updateStanding(), toppled=Math.max(0, state.standBefore-after);
+    const mult = toppled>=12?5 : toppled>=8?4 : toppled>=5?3 : toppled>=3?2 : 1;   // big collapses = big multiplier
+    if(toppled>0){ const pts=toppled*10*mult; state.score+=pts; updateScore();
+      if(mult>=3) blastText('CHAIN ×'+mult+'   +'+pts);
+      else blastText('+'+pts+(mult>1?'   ×'+mult:'')); }
+    for(const b of bricks){ if(b.type==='gold' && !b.goldScored && !b.standing){ b.goldScored=true; state.score+=75; updateScore(); blastText('Treasure! +75'); } }
+    if(after===0){ win(); return; }
+    state.canFire=true; state.phase='ready';
+    if(state.blasts<=0) setTimeout(()=>{ if(updateStanding()>0 && state.phase==='ready') lose(); }, 1100);
+  }
+
+  function burst(pos,strength){ const n=Math.min(44,8+(strength|0)), arr=new Float32Array(n*3), vel=[];
+    for(let i=0;i<n;i++){ arr[i*3]=pos.x; arr[i*3+1]=pos.y; arr[i*3+2]=pos.z;
+      vel.push(new THREE.Vector3((Math.random()-0.5)*strength*0.3, Math.random()*strength*0.22+0.6, (Math.random()-0.5)*strength*0.3)); }
+    const geo=new THREE.BufferGeometry(); geo.setAttribute('position',new THREE.BufferAttribute(arr,3));
+    const mat=new THREE.PointsMaterial({color:0xe8d3a7,size:0.24,transparent:true,opacity:1});
+    const pts=new THREE.Points(geo,mat); scene.add(pts); particles.push({pts,vel,life:1}); }
+  function clearParticles(){ for(const p of particles) scene.remove(p.pts); particles=[]; }
+  function stepParticles(dt){ for(const p of particles){ const a=p.pts.geometry.attributes.position.array;
+      for(let i=0;i<p.vel.length;i++){ p.vel[i].y-=9*dt; a[i*3]+=p.vel[i].x*dt; a[i*3+1]+=p.vel[i].y*dt; a[i*3+2]+=p.vel[i].z*dt; }
+      p.pts.geometry.attributes.position.needsUpdate=true; p.life-=dt*1.3; p.pts.material.opacity=Math.max(0,p.life); }
+    particles=particles.filter(p=>{ if(p.life<=0){ scene.remove(p.pts); return false; } return true; }); }
+
+  function win(){
+    state.phase='won'; rubbleS(); timeScale=0.28; camTarget=new THREE.Vector3(LOOKAT.x+1, LOOKAT.y+1, 13);
+    const L=LEVELS[state.li], last=state.li>=LEVELS.length-1, used=L.blasts-state.blasts;
+    const stars=used<=L.par?3:used<=L.par+2?2:1;
+    setTimeout(()=>{ timeScale=1;
+      const st=document.getElementById('ovStars'); st.hidden=false;
+      st.innerHTML='★★★'.split('').map((s,i)=>i<stars?'★':'<span class="off">★</span>').join('');
+      showOverlay('The wall is fallen!', `<span>${L.verse}</span><cite>${L.cite}</cite>`,
+        last?`City taken · Score ${state.score}`:`${stars} star${stars>1?'s':''} · ${state.blasts} blast${state.blasts===1?'':'s'} to spare`,
+        last?'Play again':'Next wall →', ()=>{ state.li=last?0:state.li+1; if(last) state.score=0; buildLevel(); }); }, 1250);
+  }
+  function lose(){ state.phase='lost'; document.getElementById('ovStars').hidden=true;
+    showOverlay('The wall still stands', `<span>“March around the city once with all the armed men. Do this for six days.”</span><cite>Joshua 6:3 (WEB)</cite>`,
+      'Out of blasts — stones still on the platform (shown glowing). Aim blasts to push them off.', 'Try again', ()=>buildLevel()); }
+
+  function drawHorns(){ const box=document.getElementById('horns'); const total=LEVELS[state.li].blasts;
+    if(total>12){ box.innerHTML='<span class="horn">📯</span><span style="font-weight:600;margin-left:4px">× '+state.blasts+'</span>'; return; }
+    box.innerHTML=''; for(let i=0;i<total;i++){ const s=document.createElement('span'); s.className='horn'+(i>=state.blasts?' used':''); s.textContent='📯'; box.appendChild(s); } }
+  function showOverlay(t,v,n,b,cb){ document.getElementById('ovTitle').textContent=t; document.getElementById('ovVerse').innerHTML=v;
+    document.getElementById('ovNote').textContent=n; const bt=document.getElementById('ovBtn'); bt.textContent=b; bt.onclick=()=>cb();
+    document.getElementById('overlay').classList.add('show'); }
+  function hideOverlay(){ document.getElementById('overlay').classList.remove('show'); document.getElementById('ovStars').hidden=true; }
+  let hintT=null; function showHint(t){ const h=document.getElementById('hint'); h.textContent=t; h.style.opacity='1'; clearTimeout(hintT); hintT=setTimeout(()=>h.style.opacity='0',4200); }
+  function hideHint(){ document.getElementById('hint').style.opacity='0'; }
+  let btT=null; function blastText(t){ const e=document.getElementById('blastText'); e.textContent=t; e.classList.add('show'); clearTimeout(btT); btT=setTimeout(()=>e.classList.remove('show'),900); }
+
+  // Point the horn where the player aims, and track its bell opening (muzzle) in world space.
+  function aimHorn(target){ if(!horn) return; const d=new THREE.Vector3().subVectors(target,HORN);
+    if(d.lengthSq()<1e-4) return; d.normalize();
+    horn.quaternion.setFromUnitVectors(new THREE.Vector3(1,0,0), d);
+    horn.updateMatrixWorld(true); MUZZLE.copy(horn.localToWorld(new THREE.Vector3(2.08,0.03,0))); }
+  function updateAim(e){ const r=cv.getBoundingClientRect();
+    const px=((e.clientX-r.left)/r.width)*2-1, py=-((e.clientY-r.top)/r.height)*2+1;
+    raycaster.setFromCamera({x:px,y:py},camera); const hit=new THREE.Vector3();
+    if(raycaster.ray.intersectPlane(aimPlane,hit)){ aim.copy(hit); } }   // aim anywhere on screen, high or low
+  function down(e){ if(!state.canFire||state.phase==='won'||state.phase==='lost')return; updateAim(e); charging=true; downAt=performance.now(); e.preventDefault(); }
+  function move(e){ if(e.cancelable)e.preventDefault(); updateAim(e); }
+  function up(){ if(!charging)return; charging=false; const power=Math.min(1,Math.max(0.18,(performance.now()-downAt)/850)); startPulse(aim.clone(),power); }
+  cv.addEventListener('pointerdown',down); window.addEventListener('pointermove',move,{passive:false}); window.addEventListener('pointerup',up);
+
+  let last=performance.now();
+  function loop(now){ const dt=Math.min(0.033,(now-last)/1000); last=now;
+    if(world){ if(state.phase!=='won'&&state.phase!=='lost') drift(now); world.step(1/60, dt*timeScale, 3); }
+    for(const b of bricks){ if(!b.gone){ b.mesh.position.copy(b.body.position); b.mesh.quaternion.copy(b.body.quaternion); } }
+    if(pulse){ pulse.t=Math.min(1,pulse.t+dt*2.0);        // slow wave, visible crossing the wider gap
+      for(const r of pulse.rings){ const pr=Math.max(0,Math.min(1,pulse.t-r.phase));
+        r.m.visible=pulse.t>r.phase; r.m.position.lerpVectors(pulse.from,pulse.to,pr);
+        r.m.scale.setScalar(0.4+pr*1.6); r.m.material.opacity=0.85*(1-pr*0.55); }
+      if(pulse.t>=1){ const tgt=pulse.to.clone(), pw=pulse.power, fin=pulse.isFinal; clearPulse(); detonate(tgt,pw,{final:fin}); } }
+    stepDeto(dt); stepParticles(dt);
+    if(state.phase==='blasting' && detos.length===0) resolveShot();
+
+    if(state.canFire) aimHorn(aim);   // horn tracks where you aim
+    // reticle + charge preview
+    const chargeP=charging?Math.min(1,(now-downAt)/850):0;
+    if(reticle){ reticle.position.copy(aim); reticle.lookAt(camera.position); reticle.scale.setScalar(1+chargeP*0.4); reticle.material.opacity=state.canFire?0.9:0.2; }
+    if(previewSphere){ if(charging){ previewSphere.visible=true; previewSphere.position.copy(aim); previewSphere.scale.setScalar(previewRadius(0.18+chargeP*0.82)); }
+      else previewSphere.visible=false; }
+
+    if(state.phase!=='won'&&state.phase!=='lost'&&(now|0)%6===0) updateStanding();
+    updateGlow(now);
+
+    camBase.lerp(camTarget,0.05);
+    if(shake>0.002){ camera.position.set(camBase.x+(Math.random()-0.5)*shake,camBase.y+(Math.random()-0.5)*shake,camBase.z+(Math.random()-0.5)*shake); shake*=0.9; }
+    else camera.position.copy(camBase);
+    camera.lookAt(LOOKAT);
+    renderer.render(scene,camera); requestAnimationFrame(loop);
+  }
+
+  document.getElementById('hintBtn').onclick=()=>{ hintUntil=performance.now()+4000; const n=updateStanding();
+    showHint(n>0?(n+' stone'+(n===1?'':'s')+' still on a platform — now glowing'):'All clear — nothing left on the platforms'); };
+  document.getElementById('muteBtn').onclick=(e)=>{ muted=!muted; e.currentTarget.textContent=muted?'🔇':'🔊'; };
+  document.getElementById('resetBtn').onclick=()=>{ buildLevel(); };
+
+  function start(data){ if(data&&typeof data.li==='number'&&data.li>=0&&data.li<LEVELS.length) state.li=data.li;
+    buildLevel(); requestAnimationFrame(loop); }
+  if(window.claude&&window.claude.hot){ window.claude.hot.snapshot(()=>({li:state.li}));
+    window.claude.hot.ready?window.claude.hot.ready(start):start(window.claude.hot.data||{}); } else start({});
+})();
+</script>
