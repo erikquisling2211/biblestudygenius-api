@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Bible Solitaire</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg1:#1b1430; --bg2:#2a1d4a; --felt1:#13351f; --felt2:#0d2817;
+  --gold:#e9c66b; --gold2:#c99a3a; --ink:#f3ead4; --red:#d23b3b; --black:#20242e;
+  --card:#f7f1e2; --slot:rgba(255,255,255,.10);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
+html,body{margin:0;height:100%}
+body{
+  font-family:Inter,system-ui,sans-serif;color:var(--ink);
+  background:radial-gradient(130% 90% at 50% 0,var(--bg2),var(--bg1));
+  padding:calc(env(safe-area-inset-top) + 64px) 8px calc(env(safe-area-inset-bottom) + 10px) 8px;
+  min-height:100%;overflow-x:hidden;
+}
+header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+h1{font-family:Cinzel,serif;font-size:19px;font-weight:700;color:var(--gold);margin:0;line-height:1}
+h1 small{display:block;font-family:Inter,sans-serif;font-weight:600;font-size:9.5px;letter-spacing:2px;color:#b9a7e0;margin-top:3px;text-transform:uppercase}
+.tools{display:flex;gap:6px}
+.btn{font-family:Inter,sans-serif;font-weight:600;font-size:12px;color:var(--ink);
+  background:rgba(255,255,255,.08);border:1px solid rgba(233,198,107,.35);border-radius:9px;padding:8px 10px}
+.btn:active{background:rgba(233,198,107,.2)}
+.table{background:linear-gradient(160deg,var(--felt1),var(--felt2));border:1px solid rgba(233,198,107,.25);
+  border-radius:14px;padding:9px 7px 12px;box-shadow:inset 0 2px 14px rgba(0,0,0,.4)}
+.top{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin-bottom:10px}
+.tableau{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;align-items:start}
+.col{position:relative;min-height:84px}
+.slot{border-radius:7px;background:var(--slot);border:1px dashed rgba(255,255,255,.18);aspect-ratio:5/7}
+.slot.found{border-color:rgba(233,198,107,.4)}
+.slot .ss{display:flex;align-items:center;justify-content:center;height:100%;font-size:17px;opacity:.28;color:#fff}
+.card{position:relative;border-radius:7px;background:var(--card);box-shadow:0 1px 2px rgba(0,0,0,.4);
+  aspect-ratio:5/7;overflow:hidden;border:1px solid rgba(0,0,0,.25)}
+.card .cnr{position:absolute;top:2px;left:3px;font-weight:700;line-height:.9;font-size:12px;display:flex;flex-direction:column;align-items:center}
+.card .pip{position:absolute;bottom:2px;right:3px;font-size:14px;line-height:1}
+.card.red{color:var(--red)} .card.blk{color:var(--black)}
+.card.down{background:
+  repeating-linear-gradient(45deg,#3a2a66 0 6px,#34245c 6px 12px);border:1px solid #241843}
+.card.down .bk{position:absolute;inset:4px;border:1px solid rgba(233,198,107,.5);border-radius:5px;
+  display:flex;align-items:center;justify-content:center}
+.card.down .bk b{color:var(--gold);font-size:16px;opacity:.9}
+.card.sel{outline:3px solid var(--gold);outline-offset:-1px;box-shadow:0 0 12px rgba(233,198,107,.7)}
+.stk{position:relative;overflow:visible}
+.top{overflow:visible}
+.stk .card,.stk .slot{position:absolute;inset:0}
+#waste{z-index:5}
+.hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:20px;color:rgba(233,198,107,.55)}
+#msg{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 18px);transform:translateX(-50%);
+  background:rgba(20,14,36,.94);border:1px solid rgba(233,198,107,.4);color:var(--ink);
+  padding:9px 16px;border-radius:20px;font-size:13px;font-weight:600;opacity:0;transition:.25s;pointer-events:none;z-index:40}
+#msg.show{opacity:1}
+#overlay{position:fixed;inset:0;background:rgba(12,8,24,.86);display:none;align-items:center;justify-content:center;padding:26px;z-index:50}
+#overlay.show{display:flex}
+.win{max-width:400px;text-align:center}
+.win .crown{font-size:46px;margin-bottom:8px}
+.win h2{font-family:Cinzel,serif;color:var(--gold);font-size:26px;margin:0 0 16px}
+.win .verse{font-size:clamp(20px,6vw,27px);line-height:1.34;color:var(--ink);font-weight:600;margin:0 0 10px}
+.win cite{display:block;font-style:normal;color:#c7b3ef;font-size:clamp(14px,4vw,17px);margin-bottom:22px}
+.win .btn{font-size:15px;padding:12px 22px;background:rgba(233,198,107,.16)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Bible Solitaire<small>Klondike · Draw 3</small></h1>
+  <div class="tools">
+    <button class="btn" id="undoBtn">Undo</button>
+    <button class="btn" id="newBtn">New</button>
+  </div>
+</header>
+<div class="table">
+  <div class="top">
+    <div class="col stk" id="stock"></div>
+    <div class="col stk" id="waste"></div>
+    <div></div>
+    <div class="col stk" id="f0"></div>
+    <div class="col stk" id="f1"></div>
+    <div class="col stk" id="f2"></div>
+    <div class="col stk" id="f3"></div>
+  </div>
+  <div class="tableau" id="tab"></div>
+</div>
+<div id="msg"></div>
+<div id="overlay"><div class="win">
+  <div class="crown">👑</div>
+  <h2>Well Done!</h2>
+  <p class="verse" id="ovVerse"></p>
+  <cite id="ovCite"></cite>
+  <button class="btn" id="ovBtn">Deal again</button>
+</div></div>
+<script>
+const SUIT=['♥','♦','♣','♠']; // H D C S
+const RED=s=>s<2;
+const RANK=['','A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+const VERSES=[
+ ["“Well done, good and faithful servant.”","Matthew 25:21 (WEB)"],
+ ["“I can do all things through Christ who strengthens me.”","Philippians 4:13"],
+ ["“The Lord is my shepherd; I shall not want.”","Psalm 23:1"],
+ ["“Be strong and courageous. Do not be afraid.”","Joshua 1:9"],
+ ["“His mercies are new every morning.”","Lamentations 3:23"],
+ ["“In all things God works for the good of those who love him.”","Romans 8:28"]
+];
+let S, sel=null, hist=[];
+function fresh(){
+  let deck=[]; for(let s=0;s<4;s++)for(let r=1;r<=13;r++)deck.push({r,s,up:false});
+  for(let i=deck.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[deck[i],deck[j]]=[deck[j],deck[i]];}
+  const t=[[],[],[],[],[],[],[]];
+  for(let c=0;c<7;c++)for(let k=0;k<=c;k++){const card=deck.pop();card.up=(k===c);t[c].push(card);}
+  S={stock:deck, waste:[], found:[[],[],[],[]], tab:t};
+  sel=null; hist=[]; render();
+}
+function snap(){ hist.push(JSON.stringify(S)); if(hist.length>60)hist.shift(); }
+function undo(){ if(!hist.length){return;} S=JSON.parse(hist.pop()); sel=null; render(); }
+function cardEl(card,extra){
+  const d=document.createElement('div');
+  if(!card.up){ d.className='card down'; d.innerHTML='<div class="bk"><b>✝</b></div>'; return d; }
+  d.className='card '+(RED(card.s)?'red':'blk')+(extra||'');
+  d.innerHTML='<span class="cnr">'+RANK[card.r]+'<span>'+SUIT[card.s]+'</span></span><span class="pip">'+SUIT[card.s]+'</span>';
+  return d;
+}
+function slotEl(sym){ const d=document.createElement('div'); d.className='slot'+(sym?' found':''); if(sym)d.innerHTML='<div class="ss">'+sym+'</div>'; return d; }
+function clear(el){ while(el.firstChild)el.removeChild(el.firstChild); }
+function isSel(pile,idx,ci){ return sel&&sel.pile===pile&&sel.idx===idx&&sel.ci===ci; }
+function render(){
+  // stock
+  const st=document.getElementById('stock'); clear(st);
+  if(S.stock.length){ const c=cardEl({up:false}); st.appendChild(c); }
+  else { const s=slotEl('↺'); st.appendChild(s); }
+  st.onclick=draw;
+  // waste (draw-3 fan: show up to last 3, only top is playable)
+  const w=document.getElementById('waste'); clear(w);
+  if(S.waste.length){
+    const cw=document.getElementById('stock').clientWidth||46, ch=cw*7/5, step=Math.round(cw*0.36);
+    const start=Math.max(0,S.waste.length-3), shown=S.waste.slice(start);
+    shown.forEach((card,i)=>{
+      const ci=start+i, isTop=(ci===S.waste.length-1);
+      const c=cardEl(card,(isTop&&isSel('waste',0,ci))?' sel':'');
+      c.style.position='absolute'; c.style.top='0'; c.style.bottom='auto'; c.style.right='auto';
+      c.style.left=(i*step)+'px'; c.style.width=cw+'px'; c.style.height=ch+'px'; c.style.zIndex=10+i;
+      if(isTop){ c.onclick=()=>tapCard('waste',0,ci); } else { c.style.pointerEvents='none'; }
+      w.appendChild(c);
+    });
+  }
+  else { w.appendChild(slotEl('')); }
+  // foundations
+  for(let f=0;f<4;f++){ const el=document.getElementById('f'+f); clear(el);
+    const pile=S.found[f];
+    if(pile.length){ const top=pile[pile.length-1]; const c=cardEl(top, isSel('found',f,pile.length-1)?' sel':''); c.onclick=()=>tapCard('found',f,pile.length-1); el.appendChild(c); }
+    else { const s=slotEl(SUIT[f]); s.onclick=()=>tapDest('found',f); el.appendChild(s); }
+  }
+  // tableau
+  const tab=document.getElementById('tab'); clear(tab);
+  for(let c=0;c<7;c++){
+    const col=document.createElement('div'); col.className='col';
+    const pile=S.tab[c];
+    if(!pile.length){ const s=slotEl(''); s.onclick=()=>tapDest('tab',c); col.appendChild(s); }
+    else {
+      let offY=0;
+      pile.forEach((card,i)=>{
+        const c2=cardEl(card, isSel('tab',c,i)?' sel':'');
+        c2.style.position='absolute'; c2.style.top=offY+'px'; c2.style.left='0'; c2.style.right='0';
+        if(card.up) c2.onclick=()=>tapCard('tab',c,i); else c2.onclick=()=>tapDest('tab',c);
+        col.appendChild(c2);
+        offY += card.up ? 21 : 8;
+      });
+      col.style.height=(offY+ (84-21))+'px';
+    }
+    col.dataset.c=c;
+    tab.appendChild(col);
+  }
+}
+// valid descending alt-color run from idx to end?
+function runOK(pile,idx){
+  for(let i=idx;i<pile.length-1;i++){ const a=pile[i],b=pile[i+1];
+    if(!(a.r===b.r+1 && RED(a.s)!==RED(b.s))) return false; }
+  return true;
+}
+function tapCard(pile,idx,ci){
+  if(sel){ // second tap: if same selected card -> try foundation; else attempt move to this pile
+    if(isSel(pile,idx,ci)){ autoFound(); return; }
+    tapDest(pile,idx); return;
+  }
+  // select
+  if(pile==='waste'){ sel={pile,idx:0,ci}; render(); return; }
+  if(pile==='found'){ sel={pile,idx,ci}; render(); return; }
+  // tab: only if card up and downward run valid
+  const p=S.tab[idx]; if(!p[ci].up) return;
+  if(!runOK(p,ci)){ flash('Not a movable run'); return; }
+  sel={pile:'tab',idx,ci}; render();
+}
+function moving(){ // returns array of cards being moved
+  if(sel.pile==='waste') return [S.waste[S.waste.length-1]];
+  if(sel.pile==='found') return [S.found[sel.idx][sel.ci]];
+  return S.tab[sel.idx].slice(sel.ci);
+}
+function canToFound(card,f){ const p=S.found[f];
+  if(card.s!==f) return false;
+  if(!p.length) return card.r===1;
+  return card.r===p[p.length-1].r+1;
+}
+function canToTab(card,c){ const p=S.tab[c];
+  if(!p.length) return card.r===13; // only K on empty
+  const t=p[p.length-1]; if(!t.up) return false;
+  return t.r===card.r+1 && RED(t.s)!==RED(card.s);
+}
+function removeSel(){
+  if(sel.pile==='waste'){ return [S.waste.pop()]; }
+  if(sel.pile==='found'){ return [S.found[sel.idx].pop()]; }
+  const p=S.tab[sel.idx]; const out=p.splice(sel.ci);
+  if(p.length && !p[p.length-1].up) p[p.length-1].up=true;
+  return out;
+}
+function tapDest(pile,idx){
+  if(!sel){ // tapping a facedown tab top with nothing selected: nothing
+    return; }
+  const cards=moving(); const lead=cards[0];
+  if(pile==='found'){
+    if(cards.length===1 && canToFound(lead,idx)){ snap(); removeSel(); S.found[idx].push(lead); sel=null; render(); checkWin(); return; }
+    flash('Can’t place there'); sel=null; render(); return;
+  }
+  // tab
+  if(sel.pile==='tab' && sel.idx===idx){ sel=null; render(); return; } // tapped own column
+  if(canToTab(lead,idx)){ snap(); const moved=removeSel(); S.tab[idx].push(...moved); sel=null; render(); checkWin(); return; }
+  flash('Can’t place there'); sel=null; render();
+}
+function autoFound(){
+  const cards=moving(); if(cards.length!==1){ sel=null; render(); return; }
+  const card=cards[0];
+  for(let f=0;f<4;f++){ if(canToFound(card,f)){ snap(); removeSel(); S.found[f].push(card); sel=null; render(); checkWin(); return; } }
+  sel=null; render();
+}
+function draw(){
+  sel=null;
+  if(S.stock.length){ snap(); const n=Math.min(3,S.stock.length); for(let i=0;i<n;i++){ const c=S.stock.pop(); c.up=true; S.waste.push(c); } render(); return; }
+  if(S.waste.length){ snap(); while(S.waste.length){ const c=S.waste.pop(); c.up=false; S.stock.push(c); } render(); return; }
+}
+function checkWin(){ if(S.found.every(p=>p.length===13)) win(); }
+function win(){ const v=VERSES[Math.floor(Math.random()*VERSES.length)];
+  document.getElementById('ovVerse').textContent=v[0]; document.getElementById('ovCite').textContent=v[1];
+  document.getElementById('overlay').classList.add('show'); }
+let mt; function flash(m){ const el=document.getElementById('msg'); el.textContent=m; el.classList.add('show'); clearTimeout(mt); mt=setTimeout(()=>el.classList.remove('show'),1100); }
+document.getElementById('newBtn').onclick=()=>{ document.getElementById('overlay').classList.remove('show'); fresh(); };
+document.getElementById('undoBtn').onclick=undo;
+document.getElementById('ovBtn').onclick=()=>{ document.getElementById('overlay').classList.remove('show'); fresh(); };
+fresh();
+</script>
+</body>
+</html>
