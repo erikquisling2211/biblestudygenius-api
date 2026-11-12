@@ -89,20 +89,41 @@
   const LEVELS=[
     { day:'Day 1', blasts:16, par:12, verse:'“You shall march around the city... the wall of the city will fall down flat.”', cite:'Joshua 6:3–5 (WEB)',
       structs:[ {shape:'wall',cols:6,rows:10,x:0} ] },
-    { day:'Day 4', blasts:18, par:14, verse:'“Behold, I have given Jericho into your hand, with its king and the mighty men of valor.”', cite:'Joshua 6:2 (WEB)',
+    { day:'Day 2', blasts:17, par:13, verse:'“Behold, I have given Jericho into your hand, with its king and the mighty men of valor.”', cite:'Joshua 6:2 (WEB)',
+      structs:[ {shape:'crenel',cols:7,rows:8,x:0} ] },
+    { day:'Day 3', blasts:18, par:14, verse:'“You shall not shout, nor let your voice be heard... until the day I tell you to shout.”', cite:'Joshua 6:10 (WEB)',
       structs:[ {shape:'ziggurat',baseCols:9,x:0} ] },
+    { day:'Day 4', blasts:19, par:15, verse:'“So he caused the ark of Yahweh to go around the city, going about it once.”', cite:'Joshua 6:11 (WEB)',
+      structs:[ {shape:'arch',legH:8,x:0} ] },
+    { day:'Day 5', blasts:20, par:16, verse:'“The second day they marched around the city once, and returned into the camp. They did so six days.”', cite:'Joshua 6:14 (WEB)',
+      structs:[ {shape:'diamond',half:4,x:0} ] },
+    { day:'Day 6', blasts:22, par:17, verse:'“Joshua said to the people, ‘Shout, for Yahweh has given you the city!’”', cite:'Joshua 6:16 (WEB)',
+      structs:[ {shape:'steps',cols:8,x:0} ] },
     { day:'Day 7', blasts:26, par:20, verse:'“The people shouted, and the priests blew the trumpets... the wall fell down flat, and they took the city.”', cite:'Joshua 6:20 (WEB)',
       structs:[ {shape:'gate',x:0} ] },
   ];
   // Each shape returns grid cells {x: world-x of brick center, row: 0=bottom} placed on the base.
   function shapeCells(L){
-    const a=[];
-    if(L.shape==='ziggurat'){ let w=L.baseCols, r=0; while(w>=1){ for(let c=0;c<w;c++) a.push({x:(c-(w-1)/2)*BW,row:r}); w-=2; r++; } }
-    else if(L.shape==='gate'){ const P=(x,row)=>a.push({x:x*BW,row});
+    const a=[]; const P=(x,row)=>a.push({x:x*BW,row}); const S=L.shape;
+    if(S==='ziggurat'){ let w=L.baseCols, r=0; while(w>=1){ for(let c=0;c<w;c++) P(c-(w-1)/2,r); w-=2; r++; } }   // stepped pyramid
+    else if(S==='gate'){
       for(let r=0;r<8;r++) [-2.5,-1.5,1.5,2.5].forEach(x=>P(x,r));   // two towers, central doorway
       [-2.5,-1.5,-0.5,0.5,1.5,2.5].forEach(x=>P(x,8));               // lintel across the top
       [-2.5,-0.5,1.5].forEach(x=>P(x,9)); }                          // battlements
-    else { for(let r=0;r<L.rows;r++) for(let c=0;c<L.cols;c++) a.push({x:(c-(L.cols-1)/2)*BW,row:r}); }
+    else if(S==='arch'){ const h=L.legH||8;                          // two thick legs + a solid span (big archway)
+      for(let r=0;r<h;r++) [-3.5,-2.5,2.5,3.5].forEach(x=>P(x,r));
+      for(let k=0;k<2;k++) [-3.5,-2.5,-1.5,-0.5,0.5,1.5,2.5,3.5].forEach(x=>P(x,h+k)); }
+    else if(S==='crenel'){ const rows=L.rows||8, cols=L.cols||7, o=(cols-1)/2;   // castle wall with battlements on top
+      for(let r=0;r<rows;r++) for(let c=0;c<cols;c++) P(c-o,r);
+      for(let c=0;c<cols;c+=2) P(c-o,rows); }
+    else if(S==='diamond'){ const half=L.half||4; let r=0;          // rhombus: widen to the middle, then narrow
+      for(let w=1; w<=2*half+1; w+=2){ for(let c=0;c<w;c++) P(c-(w-1)/2,r); r++; }
+      for(let w=2*half-1; w>=1; w-=2){ for(let c=0;c<w;c++) P(c-(w-1)/2,r); r++; } }
+    else if(S==='steps'){ const cols=L.cols||7, o=(cols-1)/2;        // ascending staircase
+      for(let c=0;c<cols;c++){ const h=2+c; for(let r=0;r<h;r++) P(c-o,r); } }
+    else if(S==='twintowers'){ const rows=L.rows||12;               // two separate tall towers, open gap between
+      for(let r=0;r<rows;r++) [-2.5,-1.5,1.5,2.5].forEach(x=>P(x,r)); }
+    else { const o=(L.cols-1)/2; for(let r=0;r<L.rows;r++) for(let c=0;c<L.cols;c++) P(c-o,r); }   // plain wall
     return a;
   }
   // Tag special stones: corners (heavy anchors), keystones (weak points that chain-collapse), one treasure.
