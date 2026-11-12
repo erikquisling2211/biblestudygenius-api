@@ -88,11 +88,11 @@
   const HORN=new THREE.Vector3(0,0.5,22);
   const LEVELS=[
     { day:'Day 1', blasts:18, par:13, verse:'“You shall march around the city... the wall of the city will fall down flat.”', cite:'Joshua 6:3–5 (WEB)',
-      structs:[ {shape:'wall',cols:5,rows:10,x:-4.8}, {shape:'wall',cols:5,rows:10,x:4.8} ] },
+      structs:[ {shape:'wall',cols:4,rows:12,x:-2.6}, {shape:'wall',cols:4,rows:12,x:2.6} ] },
     { day:'Day 4', blasts:19, par:14, verse:'“Behold, I have given Jericho into your hand, with its king and the mighty men of valor.”', cite:'Joshua 6:2 (WEB)',
-      structs:[ {shape:'ziggurat',baseCols:9,x:-5.5}, {shape:'wall',cols:5,rows:10,x:5.5} ] },
+      structs:[ {shape:'ziggurat',baseCols:7,x:-3.0}, {shape:'wall',cols:4,rows:12,x:3.0} ] },
     { day:'Day 7', blasts:24, par:18, verse:'“The people shouted, and the priests blew the trumpets... the wall fell down flat, and they took the city.”', cite:'Joshua 6:20 (WEB)',
-      structs:[ {shape:'gate',x:0}, {shape:'wall',cols:3,rows:10,x:-7.5}, {shape:'wall',cols:3,rows:10,x:7.5} ] },
+      structs:[ {shape:'gate',x:0}, {shape:'wall',cols:3,rows:11,x:-4.4}, {shape:'wall',cols:3,rows:11,x:4.4} ] },
   ];
   // Each shape returns grid cells {x: world-x of brick center, row: 0=bottom} placed on the base.
   function shapeCells(L){
@@ -196,13 +196,13 @@
   function refit(){
     if(!camera) return;
     const w=cv.clientWidth||900, h=cv.clientHeight||560, aspect=Math.max(0.4,w/h), t=Math.tan(camera.fov*Math.PI/360);
-    // Pull the camera well back so the walls sit deep in the frame, with the horn as a small foreground element.
-    const dist=Math.max((_maxTop*0.80)/t, (_span*0.64)/(t*aspect), 24);
-    LOOKAT.set(_cx,_maxTop*0.38,-2);
-    const tgt=new THREE.Vector3(_cx,_maxTop*0.55+4,dist); camBase.copy(tgt); camTarget.copy(tgt);
-    // Horn stays a fixed short distance in front of the camera, low and small, so it never covers the walls.
-    HORN.set(_cx,1.7,dist-9.5); if(horn){ horn.position.copy(HORN); horn.scale.setScalar(0.9); }
-    if(dais){ dais.position.set(HORN.x,0.1,HORN.z); }
+    // Fit so the walls fill the upper frame (width binds in portrait, height in landscape); horn sits small and low.
+    const dist=Math.max((_span*0.60)/(t*aspect), (_maxTop*0.58)/t, 15);
+    LOOKAT.set(_cx,_maxTop*0.46,0);
+    const tgt=new THREE.Vector3(_cx,_maxTop*0.52+1.5,dist); camBase.copy(tgt); camTarget.copy(tgt);
+    // Horn is a small instrument low in the foreground, well below the walls — never over them.
+    HORN.set(_cx,0.9,dist-9); if(horn){ horn.position.copy(HORN); horn.scale.setScalar(0.78); }
+    if(dais){ dais.position.set(HORN.x,-0.2,HORN.z); }
   }
   function resize(){
     if(!renderer||!camera) return;
@@ -271,7 +271,7 @@
     let minX=1e9, maxX=-1e9, maxTop=0, si=0;
     for(const st of L.structs){
       const cx=st.x||0, cz=st.z||0, cells=shapeCells(st); const bs=buildBaseFor(cells,cx,cz); const bi=bases.length-1; assignTypes(st,cells);
-      bs.amp = 1.1 + state.li*0.7; bs.speed = 0.5 + state.li*0.35; bs.phase = si*1.7;   // drift wider & faster each round
+      bs.amp = 0.55 + state.li*0.3; bs.speed = 0.35 + state.li*0.18; bs.phase = si*1.7;   // gentle drift, a little more each round
       for(const cell of cells){ const x=cx+cell.x, z=cz, y=baseTopY+BH/2+cell.row*(BH+0.004), sh=0.80+((cell.row*3+(cell.x*7|0))%5)*0.03;
         let color, rough=0.95, metal=0, mass=cell.row<2?3.2:1.9;
         if(cell.type==='corner'){ color=new THREE.Color(0x4a4652); rough=0.85; mass=6; }
@@ -315,7 +315,7 @@
   function updateScore(){ document.getElementById('scoreVal').textContent=state.score; }
 
   // ---- Shockwave ----
-  function previewRadius(power){ return 1.3+power*1.9; }
+  function previewRadius(power){ return 0.85+power*1.25; }   // narrower, more focused beam — rewards precise aim
   function startPulse(target,power){
     const isFinal = state.blasts===1;   // the last blast is the great seventh shout
     state.canFire=false; state.phase='pulsing'; state.standBefore=countOnBase(); state.blasts--; drawHorns(); hornS(); hideHint();
