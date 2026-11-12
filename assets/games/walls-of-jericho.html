@@ -88,11 +88,11 @@
   const HORN=new THREE.Vector3(0,0.5,22);
   const LEVELS=[
     { day:'Day 1', blasts:20, par:15, verse:'“You shall march around the city... the wall of the city will fall down flat.”', cite:'Joshua 6:3–5 (WEB)',
-      structs:[ {shape:'wall',cols:4,rows:9,x:-2.4}, {shape:'wall',cols:4,rows:9,x:2.4} ] },
+      structs:[ {shape:'wall',cols:4,rows:9,x:-2.8}, {shape:'wall',cols:4,rows:9,x:2.8} ] },
     { day:'Day 4', blasts:18, par:14, verse:'“Behold, I have given Jericho into your hand, with its king and the mighty men of valor.”', cite:'Joshua 6:2 (WEB)',
       structs:[ {shape:'gate',x:0} ] },
     { day:'Day 7', blasts:28, par:22, verse:'“The people shouted, and the priests blew the trumpets... the wall fell down flat, and they took the city.”', cite:'Joshua 6:20 (WEB)',
-      structs:[ {shape:'wall',cols:4,rows:11,x:-2.4}, {shape:'wall',cols:4,rows:11,x:2.4} ] },
+      structs:[ {shape:'wall',cols:4,rows:11,x:-2.8}, {shape:'wall',cols:4,rows:11,x:2.8} ] },
   ];
   // Each shape returns grid cells {x: world-x of brick center, row: 0=bottom} placed on the base.
   function shapeCells(L){
@@ -110,9 +110,9 @@
     let maxRow=0,minX=1e9,maxX=-1e9; for(const c of cells){ c.type='normal'; maxRow=Math.max(maxRow,c.row); minX=Math.min(minX,c.x); maxX=Math.max(maxX,c.x); }
     for(const c of cells){ if(c.row===0 && (c.x===minX||c.x===maxX)) c.type='corner'; }
     // Spread keystones across the whole structure: left / centre / right on every other row.
-    const li=state.li, rowStep=3+li;   // fewer keystones each successive round
-    for(let r=2;r<maxRow;r+=rowStep){ const rc=cells.filter(c=>c.row===r).sort((a,b)=>a.x-b.x); if(!rc.length) continue;
-      const picks = li<=0 ? [rc[0], rc[rc.length-1]] : [rc[(rc.length/2)|0]];
+    const li=state.li, rowStep=2+li;   // plenty of pink keystones to chain-explode, fewer each round
+    for(let r=1;r<maxRow;r+=rowStep){ const rc=cells.filter(c=>c.row===r).sort((a,b)=>a.x-b.x); if(!rc.length) continue;
+      const picks = li<=0 ? [rc[0], rc[(rc.length/2)|0], rc[rc.length-1]] : li===1 ? [rc[0], rc[rc.length-1]] : [rc[(rc.length/2)|0]];
       for(const c of picks) if(c.type==='normal') c.type='key'; }
     if(st.shape==='gate'){ for(const c of cells){ if(c.row===8 && Math.abs(c.x)<=0.5*BW+0.01 && c.type==='normal') c.type='key'; } } // doorway keystone
     const top=cells.filter(c=>c.row===maxRow); if(top.length){ const g=top[(top.length/2)|0]; if(g.type!=='corner') g.type='gold'; }
@@ -197,11 +197,17 @@
     const w=cv.clientWidth||900, h=cv.clientHeight||560, aspect=Math.max(0.4,w/h), t=Math.tan(camera.fov*Math.PI/360);
     // Smash-Fest framing: walls sit well up the frame at a distance; the camera rides high and looks down so there's open ground between the cannon and the walls.
     const distW=(_span*0.58)/(t*aspect), distH=(_maxTop*0.50)/t;
-    const dist=Math.min(Math.max(distW, distH, 18), 30);
-    LOOKAT.set(_cx,_maxTop*0.40,0);
-    const tgt=new THREE.Vector3(_cx,_maxTop*0.52+3.2,dist); camBase.copy(tgt); camTarget.copy(tgt);
-    // Big cannon held close to the camera at the bottom — fixed distance in front, so its size stays constant and it's nowhere near the distant walls.
-    HORN.set(_cx, 3.1, dist-7); if(horn){ horn.position.copy(HORN); horn.scale.setScalar(0.62); }
+    const dist=Math.min(Math.max(distW, distH, 16), 22);
+    LOOKAT.set(_cx,0.2,0);                                   // aim near ground level so the walls ride high, minimal sky
+    const tgt=new THREE.Vector3(_cx,_maxTop*0.50+3,dist); camBase.copy(tgt); camTarget.copy(tgt);
+    // Cannon anchored to the camera's view frame, not to a world height — so its small tip rests on the bottom edge of the screen at ANY aspect ratio (the vertical field of view is constant).
+    const halfV=camera.fov*Math.PI/360;
+    const fwd=new THREE.Vector3().subVectors(LOOKAT,tgt).normalize();
+    const right=new THREE.Vector3().crossVectors(fwd,new THREE.Vector3(0,1,0)).normalize();
+    const up=new THREE.Vector3().crossVectors(right,fwd).normalize();
+    const Dh=7;                                              // horn distance in front of the camera (fixes its on-screen size)
+    HORN.copy(tgt).addScaledVector(fwd,Dh).addScaledVector(up,-Dh*Math.tan(halfV)+0.35);   // bottom-centre of the frame, raised just enough that the tip lands on the edge
+    if(horn){ horn.position.copy(HORN); horn.scale.setScalar(0.72); }
     if(dais){ dais.position.set(HORN.x, 0.2, HORN.z); }
   }
   function resize(){
@@ -250,18 +256,16 @@
     const bs={mesh,cap,body,cx,cz,cx0:cx,halfX,halfZ,topY,maxRow,amp:0,speed:0,phase:0,activated:false}; bases.push(bs); return bs;
   }
   function onAnyBase(p){ for(const bs of bases){ if(Math.abs(p.x-bs.cx)<=bs.halfX+0.05 && Math.abs(p.z-bs.cz)<=bs.halfZ+0.05 && p.y>bs.topY-0.1) return true; } return false; }
-  // A structure drifts as a rigid kinematic unit until a blast hits it; then it "locks" and its stones collapse with full physics.
-  function activate(i){ const bs=bases[i]; if(!bs||bs.activated) return; bs.activated=true;
-    bs.body.type=CANNON.Body.STATIC; bs.body.velocity.set(0,0,0); if(bs.body.updateMassProperties) bs.body.updateMassProperties();
-    for(const b of bricks){ if(b.bi===i && b.body.type===CANNON.Body.KINEMATIC){ b.body.type=CANNON.Body.DYNAMIC; b.body.mass=b.dynMass; b.body.velocity.set(0,0,0); b.body.allowSleep=true; b.body.updateMassProperties(); b.body.wakeUp(); } }
-  }
+  // A blast knocks individual blocks loose: a struck block turns dynamic and flies off. Unstruck blocks stay pinned to the base and keep drifting — the wall never stops moving.
+  function freeBrick(b){ if(b.body.type===CANNON.Body.KINEMATIC){ b.body.type=CANNON.Body.DYNAMIC; b.body.mass=b.dynMass; b.body.allowSleep=true; b.body.updateMassProperties(); b.body.wakeUp(); } }
   function drift(now){
     const t=now*0.001;
-    for(const bs of bases){ if(bs.activated) continue;
+    for(const bs of bases){                                 // every base keeps drifting the whole round
       const vx=bs.amp*bs.speed*Math.cos(t*bs.speed+bs.phase);
       bs.body.velocity.set(vx,0,0); bs.cx=bs.body.position.x;
       bs.mesh.position.x=bs.body.position.x; bs.cap.position.x=bs.body.position.x;
     }
+    // pinned blocks ride their base; knocked-loose (dynamic) blocks are free and get shoved aside by the moving base.
     for(const b of bricks){ if(b.gone) continue; if(b.body.type===CANNON.Body.KINEMATIC){ const bs=bases[b.bi]; b.body.velocity.set(bs?bs.body.velocity.x:0,0,0); } }
   }
   function buildLevel(){
@@ -271,7 +275,7 @@
     let minX=1e9, maxX=-1e9, maxTop=0, si=0;
     for(const st of L.structs){
       const cx=st.x||0, cz=st.z||0, cells=shapeCells(st); const bs=buildBaseFor(cells,cx,cz); const bi=bases.length-1; assignTypes(st,cells);
-      bs.amp = 0.55 + state.li*0.3; bs.speed = 0.35 + state.li*0.18; bs.phase = si*1.7;   // gentle drift, a little more each round
+      bs.amp = 0.6 + state.li*0.3; bs.speed = 0.4 + state.li*0.18; bs.phase = 0;   // all structures drift in sync so they keep a constant gap and never overlap
       for(const cell of cells){ const x=cx+cell.x, z=cz, y=baseTopY+BH/2+cell.row*(BH+0.004), sh=0.80+((cell.row*3+(cell.x*7|0))%5)*0.03;
         let color, rough=0.95, metal=0, mass=cell.row<2?3.2:1.9;
         if(cell.type==='corner'){ color=new THREE.Color(0x4a4652); rough=0.85; mass=6; }
@@ -298,7 +302,7 @@
   // (and glows), so the wall is "fallen" only when every stone is off.
   function countOnBase(){ let n=0; for(const b of bricks){ if(b.gone)continue; const p=b.body.position;
     if(p.y<-4){ b.gone=true; b.standing=false; continue; }
-    b.standing=onAnyBase(p); if(b.standing) n++; } return n; }
+    b.standing=(b.body.type===CANNON.Body.KINEMATIC); if(b.standing) n++; } return n; }  // still pinned to the wall = standing; once knocked loose it no longer counts
   function updateStanding(){ const n=countOnBase(); standNow=n;
     document.getElementById('standCount').textContent=n;
     document.getElementById('standBar').style.width=(100*n/Math.max(1,initialOnBase))+'%';
@@ -315,7 +319,7 @@
   function updateScore(){ document.getElementById('scoreVal').textContent=state.score; }
 
   // ---- Shockwave ----
-  function previewRadius(power){ return 0.5+power*0.7; }   // tight, focused beam — a small cluster per shot
+  function previewRadius(power){ return 1.0+power*1.0; }   // always catches a cluster — every blast frees 2+ blocks
   function startPulse(target,power){
     const isFinal = state.blasts===1;   // the last blast is the great seventh shout
     state.canFire=false; state.phase='pulsing'; state.standBefore=countOnBase(); state.blasts--; drawHorns(); hornS(); hideHint();
@@ -333,7 +337,7 @@
     const center2=center.clone(); if(!opts.key) center2.z+=0.25;
     const col=opts.key?0xff5a2a:(opts.final?0xfff0b0:0xffe6a0);
     const d={ center:center2, r:0, power:power*(opts.final?1.6:1), age:0, hit:new Set(), key:!!opts.key, nochain:!!opts.nochain,
-      max:(opts.key?1.05:previewRadius(power))*(opts.final?1.7:1)+0.2 };
+      max:(opts.key?1.6:previewRadius(power))*(opts.final?1.7:1)+0.2 };
     const sphere=new THREE.Mesh(new THREE.SphereGeometry(1,24,18), new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.4,blending:THREE.AdditiveBlending,depthWrite:false}));
     const ring=new THREE.Mesh(new THREE.TorusGeometry(1,0.06,10,40), new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.85,blending:THREE.AdditiveBlending,depthWrite:false}));
     sphere.position.copy(center2); ring.position.copy(center2); scene.add(sphere); scene.add(ring); d.sphere=sphere; d.ring=ring;
@@ -351,12 +355,12 @@
       for(const b of bricks){ if(b.gone||d.hit.has(b)) continue;
         const p=b.body.position, dx=p.x-d.center.x, dy=p.y-d.center.y, dz=p.z-d.center.z, dist=Math.hypot(dx,dy,dz);
         if(dist<=d.r){ d.hit.add(b);
-          const fall=Math.pow(1-Math.min(1,dist/d.max),1.2), f=fall*(30+d.power*38)*(d.key?1.2:1);
-          let hx=dx, hz=dz, hl=Math.hypot(hx,hz); if(hl<0.01){ hx=Math.random()-0.5; hz=Math.random()-0.5; hl=Math.hypot(hx,hz)||1; } hx/=hl; hz/=hl;
-          activate(b.bi);   // lock & release this structure into full physics
-          b.body.wakeUp();
-          b.body.applyImpulse(new CANNON.Vec3(hx*f, f*0.45+2, hz*f), new CANNON.Vec3(0,0,0));
-          const s=f*0.35; b.body.angularVelocity.x+=(Math.random()-0.5)*s; b.body.angularVelocity.y+=(Math.random()-0.5)*s; b.body.angularVelocity.z+=(Math.random()-0.5)*s;
+          const fall=Math.pow(1-Math.min(1,dist/d.max),1.1), f=fall*(24+d.power*26)*(d.key?1.2:1);
+          let hx=dx, hl=Math.abs(hx)||1; hx/=hl;   // only the sideways sign of the radial direction
+          freeBrick(b);   // knock this block loose from the wall
+          // Every freed block gets a guaranteed shove — mostly backward (into the screen, away from the horn) and up — so it flies off, not just the edges.
+          b.body.applyImpulse(new CANNON.Vec3(hx*f*0.35, f*0.5+3, -(f*0.7)), new CANNON.Vec3(0,0,0));
+          const s=f*0.3; b.body.angularVelocity.x+=(Math.random()-0.5)*s; b.body.angularVelocity.y+=(Math.random()-0.5)*s; b.body.angularVelocity.z+=(Math.random()-0.5)*s;
           if(b.type==='key' && !b.keyFired && !d.nochain){ b.keyFired=true; b.mesh.material.emissive.setHex(0x000000); chain.push(new THREE.Vector3(p.x,p.y,p.z)); }
         }
       }
@@ -365,7 +369,7 @@
     }
     flashLight.intensity*=0.82;
     for(let i=detos.length-1;i>=0;i--){ const d=detos[i]; if(d.r>=d.max && d.age>0.22){ scene.remove(d.sphere); scene.remove(d.ring); detos.splice(i,1); } }
-    for(const pos of chain) detonate(pos, 0.5, {key:true, nochain:true});   // a struck keystone pops its immediate neighbours only — no runaway cascade
+    for(const pos of chain) detonate(pos, 0.7, {key:true, nochain:true});   // a struck keystone explodes and pops nearby blocks, but doesn't ripple across the whole wall
     if(detos.length===0) flashLight.intensity=0;
   }
   function clearDeto(){ for(const d of detos){ scene.remove(d.sphere); scene.remove(d.ring); } detos=[]; flashLight.intensity=0; }
@@ -428,7 +432,7 @@
   function updateAim(e){ const r=cv.getBoundingClientRect();
     const px=((e.clientX-r.left)/r.width)*2-1, py=-((e.clientY-r.top)/r.height)*2+1;
     raycaster.setFromCamera({x:px,y:py},camera); const hit=new THREE.Vector3();
-    if(raycaster.ray.intersectPlane(aimPlane,hit)){ hit.y=Math.max(0.3,hit.y); aim.copy(hit); } }
+    if(raycaster.ray.intersectPlane(aimPlane,hit)){ aim.copy(hit); } }   // aim anywhere on screen, high or low
   function down(e){ if(!state.canFire||state.phase==='won'||state.phase==='lost')return; updateAim(e); charging=true; downAt=performance.now(); e.preventDefault(); }
   function move(e){ if(e.cancelable)e.preventDefault(); updateAim(e); }
   function up(){ if(!charging)return; charging=false; const power=Math.min(1,Math.max(0.18,(performance.now()-downAt)/850)); startPulse(aim.clone(),power); }
