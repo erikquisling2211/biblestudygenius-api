@@ -311,11 +311,11 @@
     return n; }
   // Per-frame glow: keystones always pink; remaining stones glow gold, and PULSE brightly when hinting or when few remain.
   function updateGlow(now){
-    const hinting = now<hintUntil || (standNow>0 && standNow<=5);
-    const pulse = 0.5+0.7*Math.abs(Math.sin(now*0.006));
+    const hinting = now<hintUntil || (standNow>0 && standNow<=6);
+    const pulse = 0.7+1.9*Math.abs(Math.sin(now*0.008));   // strong, fast pulse
     for(const b of bricks){ if(b.gone||!b.mesh) continue; const m=b.mesh.material;
       if(b.type==='key' && !b.keyFired){ m.emissive.setHex(0xff1493); m.emissiveIntensity=2.0; }
-      else if(b.standing){ m.emissive.setHex(hinting?0xffd24a:0x4a3410); m.emissiveIntensity=hinting?pulse:0.3; }
+      else if(b.standing){ m.emissive.setHex(hinting?0x2bff5a:0x4a3410); m.emissiveIntensity=hinting?pulse:0.3; }   // vivid green glow — clearly stands out on the tan blocks
       else { m.emissive.setHex(0x000000); m.emissiveIntensity=0; } }
   }
   function updateScore(){ document.getElementById('scoreVal').textContent=state.score; }
