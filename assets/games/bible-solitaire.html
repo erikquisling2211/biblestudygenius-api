@@ -27,7 +27,7 @@ h1{font-family:Cinzel,serif;font-size:18px;font-weight:700;color:var(--gold);mar
 h1 small{display:block;font-family:Inter,sans-serif;font-weight:600;font-size:9px;letter-spacing:2px;color:#d8ecd8;margin-top:3px;text-transform:uppercase}
 .tools{display:flex;gap:6px}
 .btn{font-family:Inter,sans-serif;font-weight:700;font-size:12px;color:#15351f;
-  background:linear-gradient(180deg,#f0d884,#d9b14e);border:none;border-radius:9px;padding:9px 13px;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+  background:linear-gradient(180deg,#f0d884,#d9b14e);border:none;border-radius:9px;padding:9px 12px;box-shadow:0 1px 2px rgba(0,0,0,.35)}
 .btn:active{filter:brightness(.92)}
 .btn.ghost{background:rgba(0,0,0,.28);color:var(--ink);box-shadow:none;border:1px solid rgba(255,255,255,.2)}
 .top{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin-bottom:14px}
@@ -72,7 +72,8 @@ h1 small{display:block;font-family:Inter,sans-serif;font-weight:600;font-size:9p
   <h1>Bible Solitaire<small>Klondike · Draw 3</small></h1>
   <div class="tools">
     <button class="btn ghost" id="undoBtn">Undo</button>
-    <button class="btn" id="newBtn">New Game</button>
+    <button class="btn ghost" id="resignBtn">Resign</button>
+    <button class="btn" id="newBtn">New</button>
   </div>
 </header>
 <div class="top">
@@ -91,7 +92,7 @@ h1 small{display:block;font-family:Inter,sans-serif;font-weight:600;font-size:9p
   <h2 id="ovTitle">Well Done!</h2>
   <p class="verse" id="ovVerse"></p>
   <cite id="ovCite"></cite>
-  <button class="btn" id="ovBtn">Deal again</button>
+  <button class="btn" id="ovBtn">Play Again</button>
 </div></div>
 <script>
 const SUIT=['♥','♦','♣','♠']; // H D C S
@@ -109,17 +110,17 @@ const VERSES=[
  ["“The joy of the Lord is your strength.”","Nehemiah 8:10"],
  ["“Weeping may stay for the night, but rejoicing comes in the morning.”","Psalm 30:5"]
 ];
-let S, sel=null, hist=[], ended=false;
+let S, sel=null, hist=[], ended=false, auto=false, autoGaveUp=false;
 function fresh(){
   let deck=[]; for(let s=0;s<4;s++)for(let r=1;r<=13;r++)deck.push({r,s,up:false});
   for(let i=deck.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[deck[i],deck[j]]=[deck[j],deck[i]];}
   const t=[[],[],[],[],[],[],[]];
   for(let c=0;c<7;c++)for(let k=0;k<=c;k++){const card=deck.pop();card.up=(k===c);t[c].push(card);}
   S={stock:deck, waste:[], found:[[],[],[],[]], tab:t};
-  sel=null; hist=[]; ended=false; render();
+  sel=null; hist=[]; ended=false; auto=false; autoGaveUp=false; render();
 }
 function snap(){ hist.push(JSON.stringify(S)); if(hist.length>80)hist.shift(); }
-function undo(){ if(!hist.length)return; S=JSON.parse(hist.pop()); sel=null; ended=false; render(); }
+function undo(){ if(auto||!hist.length)return; S=JSON.parse(hist.pop()); sel=null; ended=false; autoGaveUp=false; render(); }
 function cardEl(card,extra){
   const d=document.createElement('div');
   if(!card.up){ d.className='card down'; d.innerHTML='<div class="bk"><b>✝</b></div>'; return d; }
@@ -219,10 +220,28 @@ function isStuck(){
   } }
   return true;
 }
-function checkEnd(){ if(ended)return; if(hasWon()){ ended=true; showEnd(true); } else if(isStuck()){ ended=true; showEnd(false); } }
+function noFaceDown(){ return S.tab.every(p=>p.every(c=>c.up)); }
+function checkEnd(){ if(ended||auto)return;
+  if(hasWon()){ ended=true; showEnd(true); return; }
+  if(!autoGaveUp && noFaceDown() && (S.stock.length||S.waste.length||S.tab.some(p=>p.length))){ startAuto(); return; }
+  if(isStuck()){ ended=true; showEnd(false); }
+}
+function startAuto(){ if(auto)return; auto=true; snap(); autoStep(0); }
+function autoStep(n){
+  if(!auto)return;
+  if(hasWon()){ auto=false; ended=true; render(); showEnd(true); return; }
+  if(n>600){ auto=false; autoGaveUp=true; render(); return; }
+  let did=false;
+  for(let c=0;c<7;c++){ const p=S.tab[c]; if(p.length){ const top=p[p.length-1]; const f=foundFor(top); if(f>=0){ p.pop(); S.found[f].push(top); did=true; break; } } }
+  if(!did && S.waste.length){ const top=S.waste[S.waste.length-1]; const f=foundFor(top); if(f>=0){ S.waste.pop(); S.found[f].push(top); did=true; } }
+  if(!did){ outer: for(let c=0;c<7;c++){ const p=S.tab[c]; if(p.length>=2){ const top=p[p.length-1], beneath=p[p.length-2]; if(foundFor(beneath)>=0){ for(let d=0;d<7;d++){ if(d!==c && canToTab(top,d)){ S.tab[d].push(S.tab[c].pop()); did=true; break outer; } } } } } }
+  if(!did && (S.stock.length||S.waste.length)){ if(S.stock.length){ const k=Math.min(3,S.stock.length); for(let i=0;i<k;i++){ const cc=S.stock.pop(); cc.up=true; S.waste.push(cc); } } else { while(S.waste.length){ const cc=S.waste.pop(); cc.up=false; S.stock.push(cc); } } did=true; }
+  if(!did){ auto=false; autoGaveUp=true; render(); return; }
+  render(); setTimeout(()=>autoStep(n+1), 85);
+}
 function showEnd(won){ const v=VERSES[Math.floor(Math.random()*VERSES.length)];
   document.getElementById('ovCrown').textContent=won?'👑':'🕊️';
-  document.getElementById('ovTitle').textContent=won?'Well Done!':'Good Game';
+  document.getElementById('ovTitle').textContent=won?'Great Job!':'Good Game';
   document.getElementById('ovVerse').textContent=v[0]; document.getElementById('ovCite').textContent=v[1];
   document.getElementById('overlay').classList.add('show');
 }
@@ -272,7 +291,8 @@ function finishPointer(e){ if(!down)return; const el=down.el;
 }
 document.addEventListener('pointerup',finishPointer);
 document.addEventListener('pointercancel',e=>{ if(ghost){ghost.remove();ghost=null;} dimmed.forEach(n=>n.classList.remove('drag-src')); down=null; drag=false; dimmed=[]; });
-document.getElementById('newBtn').onclick=()=>{ document.getElementById('overlay').classList.remove('show'); fresh(); };
+document.getElementById('newBtn').onclick=()=>{ auto=false; document.getElementById('overlay').classList.remove('show'); fresh(); };
+document.getElementById('resignBtn').onclick=()=>{ if(ended)return; auto=false; ended=true; showEnd(false); };
 document.getElementById('undoBtn').onclick=undo;
 document.getElementById('ovBtn').onclick=()=>{ document.getElementById('overlay').classList.remove('show'); fresh(); };
 fresh();
