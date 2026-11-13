@@ -140,7 +140,7 @@ function type(ch){ if(!isCell(sel.r,sel.c))return; user[sel.r][sel.c]=ch;
 function advance(back){ const w=wordOf(sel.r,sel.c,dir); if(!w)return; const idx=w.cells.findIndex(x=>x.r===sel.r&&x.c===sel.c); const ni=idx+(back?-1:1); if(ni>=0&&ni<w.cells.length) sel=w.cells[ni]; }
 function backspace(){ if(user[sel.r][sel.c]){ user[sel.r][sel.c]=''; render(); return;} advance(true); user[sel.r][sel.c]=''; render(); }
 function checkWin(){ for(let r=0;r<N;r++)for(let c=0;c<N;c++){const cell=P.cells[r][c]; if(cell&&user[r][c]!==cell.s)return;} win(); }
-function win(){ let played=load(SK,[]); if(played.indexOf(pi)<0){played.push(pi); save(SK,played);} document.getElementById('ovVerse').textContent=P.verse; document.getElementById('ovCite').textContent=P.cite;
+function win(){ let played=load(SK,[]); if(played.indexOf(pi)<0){played.push(pi); save(SK,played); try{ window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({type:'iq',game:'crossword'})); }catch(e){} } document.getElementById('ovVerse').textContent=P.verse; document.getElementById('ovCite').textContent=P.cite;
   document.getElementById('ovBtn').textContent='Next puzzle →'; document.getElementById('overlay').classList.add('show'); }
 function doCheck(){ let bad=0; for(let r=0;r<N;r++)for(let c=0;c<N;c++){const cell=P.cells[r][c]; if(cell&&user[r][c]&&user[r][c]!==cell.s){cellEl(r,c).classList.add('bad');bad++;}}
   toast(bad?bad+' letter'+(bad>1?'s':'')+' off':'Looking good!'); if(bad)setTimeout(()=>document.querySelectorAll('.cell.bad').forEach(e=>e.classList.remove('bad')),1400); }
