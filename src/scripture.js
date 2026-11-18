@@ -100,7 +100,7 @@ const BRAIN_BASE = "https://4.dbt.io/api";
 const BRAIN_FILESET = {
   esv:  { ot: "ENGESVO1DA", nt: "ENGESVN1DA" },
   bsb:  { ot: "ENGBERO1DA", nt: "ENGBERN1DA" }, // full Bible, plain
-  web:  { ot: null,         nt: "ENGWEBN2DA" }, // NT only (dramatized)
+  web:  { ot: "EN1WEBO2DA", nt: "EN1WEBN2DA" }, // Winfred Henson recording, full Bible (bible ENGWWH)
   kjv:  { ot: "ENGKJVO1DA", nt: "ENGKJVN1DA" },
   nlt:  { ot: "ENGNLHO1DA", nt: "ENGNLHN1DA" }, // her.BIBLE plain reading
   nkjv: { ot: null,         nt: "ENGNKJN1DA" }, // New Testament only
