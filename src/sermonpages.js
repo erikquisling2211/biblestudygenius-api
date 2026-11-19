@@ -118,9 +118,29 @@ async function appleUrl(c) {
   return url;
 }
 
+/* ---------------- brand color contrast ---------------- */
+function lum(hex) {
+  let h = String(hex).replace("#", "");
+  if (h.length === 3) h = h.split("").map((x) => x + x).join("");
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+/** Brand color for text/links only if readable on the dark page; button text flips white/dark for legibility. */
+function palette(brand) {
+  const gold = "#d8b25a", bg = "#14132b";
+  const ok = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(brand || "");
+  const btn = ok ? brand : gold;
+  return {
+    text: ok && contrast(brand, bg) >= 4.5 ? brand : gold,
+    btn,
+    btnText: contrast(btn, "#ffffff") >= 4.5 ? "#ffffff" : "#1a1830",
+  };
+}
+
 /* ---------------- layout ---------------- */
 function page({ title, description, canonical, image, type = "website", body, ld, accent }) {
-  const a = /^#[0-9a-f]{3,8}$/i.test(accent || "") ? accent : "#d8b25a";
+  const pal = palette(accent);
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -142,7 +162,7 @@ function page({ title, description, canonical, image, type = "website", body, ld
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Source+Sans+3:wght@400;600;700&display=swap">
 ${ld ? `<script type="application/ld+json">${jsonLd(ld)}</script>` : ""}
 <style>
-:root{--bg:#14132b;--card:#1e1d3a;--line:#2e2d52;--text:#ece9f7;--dim:#a9a6c4;--accent:${a}}
+:root{--bg:#14132b;--card:#1e1d3a;--line:#2e2d52;--text:#ece9f7;--dim:#a9a6c4;--accent:${pal.text};--btn:${pal.btn};--btn-text:${pal.btnText}}
 *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 "Source Sans 3",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
@@ -159,7 +179,7 @@ h1{font-size:clamp(30px,6vw,42px)}h2{font-size:26px;margin-top:28px}h3{font-size
 .btns{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}
 .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:999px;border:1px solid var(--line);background:#25244a;color:var(--text);font-weight:600;font-size:15px;cursor:pointer}
 .btn:hover{text-decoration:none;border-color:var(--accent)}
-.btn.primary{background:var(--accent);color:#1a1830;border-color:var(--accent)}
+.btn.primary{background:var(--btn);color:var(--btn-text);border-color:var(--btn)}
 .list{list-style:none;padding:0;margin:0}
 .list li{border-top:1px solid var(--line)}.list li:first-child{border-top:0}
 .list a{display:block;padding:14px 2px;color:var(--text)}.list a:hover{text-decoration:none}
