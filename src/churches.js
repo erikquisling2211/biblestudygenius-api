@@ -1072,7 +1072,15 @@ export function mountChurches(app) {
       if (event.type === "checkout.session.completed") {
         const session = await stripe.checkout.sessions.retrieve(event.data.object.id);
         const paid = session.status === "complete" || session.payment_status === "paid" || session.payment_status === "no_payment_required";
-        if (paid) {
+        // Only the church plan onboards a church. The same Stripe account also takes app donations
+        // (one-time "Give once" and $3/$9/$19 monthly links) — those must never create a church.
+        let isChurchPlan = false;
+        if (paid && process.env.STRIPE_PRICE_ID) {
+          const items = await stripe.checkout.sessions.listLineItems(session.id, { limit: 10 });
+          isChurchPlan = items.data.some((li) => li.price && li.price.id === process.env.STRIPE_PRICE_ID);
+        }
+        if (paid && !isChurchPlan) console.log(`💝 Checkout ${session.id} is not the church plan (donation) — no church created`);
+        if (paid && isChurchPlan) {
           const dupe = await pool.query(`SELECT id FROM churches WHERE stripe_customer_id = $1 LIMIT 1`, [session.customer]);
           if (!dupe.rows.length) {
             const md = session.metadata || {};
