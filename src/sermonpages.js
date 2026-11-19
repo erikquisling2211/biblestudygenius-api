@@ -54,7 +54,8 @@ function sermonDate(s) {
   return { iso: d.toISOString(), label: d.toLocaleDateString("en-US", { timeZone: TZ, year: "numeric", month: "long", day: "numeric" }) };
 }
 
-const coverUrl = (name) => `${PUBLIC_BASE}/cover.png?title=${encodeURIComponent(String(name).slice(0, 80))}&sub=Sermons`;
+const coverPath = (name) => `/cover.png?title=${encodeURIComponent(String(name).slice(0, 80))}&sub=Sermons`;
+const coverUrl = (name) => `${PUBLIC_BASE}${coverPath(name)}`; // absolute: og:image / JSON-LD
 // Full official name (what people search for) for slugs, titles and headings; display_name is the app's short label.
 const churchName = (c) => c.name || c.display_name;
 const place = (c) => [c.city, c.state].filter(Boolean).join(", ");
@@ -153,7 +154,7 @@ h1{font-size:clamp(30px,6vw,42px)}h2{font-size:26px;margin-top:28px}h3{font-size
 .muted{color:var(--dim)}.small{font-size:14px}
 .hero{display:flex;gap:18px;align-items:center;margin-bottom:8px}
 .hero img{width:120px;height:120px;border-radius:14px;object-fit:cover;flex:none;border:1px solid var(--line)}
-@media(max-width:520px){.hero{flex-direction:column;align-items:flex-start}.hero img{width:100%;height:auto;max-width:320px}}
+@media(max-width:520px){.hero{gap:14px;align-items:flex-start}.hero img{width:84px;height:84px;border-radius:12px}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin:12px 0}
 .btns{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}
 .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:999px;border:1px solid var(--line);background:#25244a;color:var(--text);font-weight:600;font-size:15px;cursor:pointer}
@@ -276,7 +277,7 @@ export function mountSermonPages(app) {
         ld: { "@context": "https://schema.org", "@type": "Church", name, url: `${PUBLIC_BASE}/church/${c.slug}`, image: coverUrl(name),
           ...(c.website ? { sameAs: [c.website] } : {}),
           ...(where ? { address: { "@type": "PostalAddress", addressLocality: c.city || undefined, addressRegion: c.state || undefined } } : {}) },
-        body: `<div class="hero"><img src="${esc(coverUrl(name))}" alt="${esc(name)} sermons" width="120" height="120">
+        body: `<div class="hero"><img src="${esc(coverPath(name))}" alt="${esc(name)} sermons" width="120" height="120">
           <div><h1>${esc(name)}</h1><p class="muted">${esc([c.denomination, where].filter(Boolean).join(" · "))}${c.website ? ` · <a href="${esc(c.website)}" rel="noopener">Website</a>` : ""}</p></div></div>
           <p>${esc(desc)}</p>
           <h3>Subscribe</h3><div class="btns">${subscribe}</div>
@@ -316,7 +317,7 @@ export function mountSermonPages(app) {
 
       const body = `
 <p class="small"><a href="/church/${esc(c.slug)}">← ${esc(name)}</a></p>
-<div class="hero"><img src="${esc(coverUrl(name))}" alt="${esc(name)}" width="120" height="120">
+<div class="hero"><img src="${esc(coverPath(name))}" alt="${esc(name)}" width="120" height="120">
 <div><h1>${esc(title)}</h1><p class="muted">${esc([d.label, speaker].filter(Boolean).join(" · "))}</p></div></div>
 ${audioSrc ? `<div class="card"><audio controls preload="none" src="${esc(audioSrc)}"></audio></div>` : ""}
 ${s.video_id ? `<div class="video"><iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(s.video_id)}${start ? `?start=${start}` : ""}" title="${esc(title)} video" loading="lazy" allow="accelerometer; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>` : ""}
