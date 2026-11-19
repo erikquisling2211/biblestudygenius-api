@@ -20,6 +20,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import Stripe from "stripe";
 import QRCode from "qrcode";
+import { ensureSmartLink, shareLinkFor, mountSmartLinks } from "./smartlinks.js";
 
 const CHURCH_JWT_SECRET = process.env.CHURCH_JWT_SECRET || process.env.ADMIN_TOKEN || "bsg-church-dev-secret";
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
@@ -393,6 +394,7 @@ async function onboardChurch({ name, city, state, email, sourceType, sourceUrl, 
      email || null, stripeCustomerId || null, stripeSubscriptionId || null, Date.now()]
   );
   const church = ins.rows[0];
+  await ensureSmartLink(church.id); // smart deep link, stored on the church
 
   // If a source was detected at signup (detect-first flow), process the first sermon now so
   // content is live immediately. Card-first signups have no source yet — they connect it in the dashboard.
@@ -536,6 +538,7 @@ ${items}
 }
 
 export function mountChurches(app) {
+  mountSmartLinks(app, { admin });
   initChurches().catch((e) => console.error("initChurches", e));
 
   // Serve brand imagery (sunrise photos, app icon) for the website — e.g.
@@ -699,7 +702,8 @@ export function mountChurches(app) {
         [b.name, b.city || null, b.state || null, b.zip || null, b.lat ?? null, b.lon ?? null,
          b.denomination || null, b.website || null, b.feed_url || null, b.youtube_url || null, b.aliases || null, b.scrape_url || null, b.calendar_url || null, b.giving_url || null, Date.now()]
       );
-      res.json(r.rows[0]);
+      const smartLink = await ensureSmartLink(r.rows[0].id);
+      res.json({ ...r.rows[0], smart_link: smartLink });
     } catch (e) {
       console.error("POST /admin/church", e);
       res.status(500).json({ error: String((e && e.message) || e) });
@@ -1017,6 +1021,7 @@ export function mountChurches(app) {
          Date.now()]
       );
       church = ins.rows[0];
+      await ensureSmartLink(church.id);
     } catch (e) {
       console.error("POST /admin/onboard insert", e);
       return res.status(500).json({ error: String((e && e.message) || e) });
@@ -1129,7 +1134,9 @@ export function mountChurches(app) {
   app.get("/church/:id/qr.png", async (req, res) => {
     if (!/^\d+$/.test(String(req.params.id))) return res.status(404).send("not found");
     try {
-      const url = `${SITE_URL}/church/${parseInt(req.params.id, 10)}`;
+      const id = parseInt(req.params.id, 10);
+      const row = (await pool.query(`SELECT id, smart_link FROM churches WHERE id = $1`, [id]).catch(() => ({ rows: [] }))).rows[0];
+      const url = row ? shareLinkFor(row) : `${SITE_URL}/church/${id}`;
       const buf = await QRCode.toBuffer(url, { type: "png", width: 600, margin: 2, color: { dark: "#1b2340", light: "#ffffff" } });
       res.set("Content-Type", "image/png");
       res.set("Cache-Control", "public, max-age=86400");
@@ -1327,15 +1334,17 @@ export function mountChurches(app) {
   // Share kit: the church's link, QR, and ready-to-use announcement copy for reaching their congregation.
   app.get("/church/me/share", churchAuth, async (req, res) => {
     try {
-      const c = await pool.query(`SELECT id, name, display_name FROM churches WHERE id = $1`, [req.church.churchId]);
+      await ensureSmartLink(req.church.churchId); // backfills churches provisioned before smart links
+      const c = await pool.query(`SELECT id, name, display_name, smart_link FROM churches WHERE id = $1`, [req.church.churchId]);
       const church = c.rows[0];
       if (!church) return res.status(404).json({ error: "not found" });
       const name = church.display_name || church.name || "our church";
       const id = church.id;
-      const shareUrl = `${SITE_URL}/church/${id}`;
+      const shareUrl = shareLinkFor(church); // smart link: opens the app, or the store then the church
       const qrUrl = `${API_BASE}/church/${id}/qr.png`;
       res.json({
         shareUrl,
+        smartLink: shareLinkFor(church),
         qrUrl,
         announcements: {
           pulpit: `We've put ${name} on Bible Study Genius — a free app that turns every sermon into a daily study plan for the whole week. Scan the code on the screen to follow us, and keep this week's message going all week.`,

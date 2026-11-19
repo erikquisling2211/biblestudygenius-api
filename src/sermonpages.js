@@ -199,12 +199,25 @@ ${body}
 </div></body></html>`;
 }
 
-const appCta = (heading = "Get the Bible Study Genius app") => `
+// App download buttons. With a churchId they carry the church through the install (deferred deep link):
+//  - Google Play: install referrer "church_<id>" — the app reads it on first launch.
+//  - App Store: the tap copies "bsg-church:<id>" to the clipboard; on first launch the iOS app
+//    offers "Were you looking for <church>?" (the App Store can't pass data through an install).
+const appCta = (heading = "Get the Bible Study Genius app", churchId = null) => {
+  const cid = Number.isInteger(churchId) ? churchId : null;
+  const play = cid ? `${PLAY_STORE_URL}&referrer=${encodeURIComponent(`church_${cid}`)}` : PLAY_STORE_URL;
+  const ios = cid ? ` data-church="${cid}"` : "";
+  return `
 <div class="card cta"><h3>${esc(heading)}</h3>
 <p class="muted small">Follow your church, listen to every sermon, and get a daily reading plan for the week.</p>
 <div class="btns" style="justify-content:center">
-<a class="btn primary" href="${APP_STORE_URL}" rel="noopener">Download on the App Store</a>
-<a class="btn" href="${PLAY_STORE_URL}" rel="noopener">Get it on Google Play</a></div></div>`;
+<a class="btn primary" href="${APP_STORE_URL}"${ios} rel="noopener">Download on the App Store</a>
+<a class="btn" href="${esc(play)}" rel="noopener">Get it on Google Play</a></div></div>${cid ? `
+<script>document.querySelectorAll('a[data-church]').forEach(function(a){a.addEventListener('click',function(e){
+var t='bsg-church:'+a.getAttribute('data-church'),h=a.href;
+if(!navigator.clipboard||!navigator.clipboard.writeText)return;e.preventDefault();
+var go=function(){location.href=h};navigator.clipboard.writeText(t).then(go,go);setTimeout(go,600);});});</script>` : ""}`;
+};
 
 function send(res, html, maxAge = 600) {
   res.set("Content-Type", "text/html; charset=utf-8");
@@ -222,6 +235,29 @@ export function mountSermonPages(app) {
   // Optional per-church podcast directory links (Apple is auto-detected when blank).
   pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS apple_podcasts_url TEXT;`).catch((e) => console.error("sermonpages migrate", e.message));
   pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS spotify_url TEXT;`).catch((e) => console.error("sermonpages migrate", e.message));
+
+  // Stable per-church web URL by id (used as the smart link's desktop target, so links made at
+  // provisioning keep working after a church is renamed and its slug changes).
+  // App-link verification for sermons.biblestudygenius.com: /c/:id short links open the app when installed.
+  app.get("/.well-known/apple-app-site-association", (_req, res) => {
+    res.set("Content-Type", "application/json");
+    res.set("Cache-Control", "public, max-age=3600");
+    res.send(JSON.stringify({ applinks: { apps: [], details: [{ appID: "6A4S48Z4GV.com.biblestudygenius.app", paths: ["/c/*"] }] } }));
+  });
+  app.get("/.well-known/assetlinks.json", (_req, res) => {
+    res.set("Cache-Control", "public, max-age=3600");
+    res.json([{ relation: ["delegate_permission/common.handle_all_urls"], target: { namespace: "android_app", package_name: "com.biblestudygenius.app",
+      sha256_cert_fingerprints: ["34:63:39:CE:0F:4A:86:97:D1:FC:D7:E2:F9:87:E7:A5:71:4A:3E:F6:2D:F5:A4:6D:DB:6B:F4:79:22:44:B2:5F"] } }]);
+  });
+
+  app.get("/c/:id", async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    try {
+      const c = Number.isFinite(id) ? (await churches()).byId.get(id) : null;
+      if (!c) return res.redirect(302, "/churches");
+      res.redirect(302, `/church/${c.slug}`);
+    } catch (e) { console.error("GET /c/:id", e); res.redirect(302, "/churches"); }
+  });
 
   app.get("/robots.txt", (_req, res) => {
     res.type("text/plain").set("Cache-Control", "public, max-age=86400")
@@ -303,7 +339,7 @@ export function mountSermonPages(app) {
           <h3>Subscribe</h3><div class="btns">${subscribe}</div>
           <h2>Recent sermons</h2>
           <div class="card"><ul class="list">${items || `<li class="muted" style="padding:12px 0">New sermons will appear here soon.</li>`}</ul></div>
-          ${appCta(`Follow ${name} in the app`)}`,
+          ${appCta(`Follow ${name} in the app`, c.id)}`,
       }));
     } catch (e) { console.error("GET /church/:slug", e); res.status(500).send("error"); }
   });
@@ -348,7 +384,7 @@ ${s.summary ? `<div class="card"><h3>Summary</h3><p>${esc(s.summary)}</p></div>`
 ${scriptures.length ? `<div class="card"><h3>Key scripture</h3>${scriptures.map((x) => `<span class="pill">${esc(x)}</span>`).join("")}</div>` : ""}
 ${questions.length ? `<div class="card"><h3>Discussion questions</h3><ol>${questions.map((q) => `<li>${esc(q)}</li>`).join("")}</ol></div>` : ""}
 ${plan.length ? `<h2>Reading plan for the week</h2><div class="card">${plan.map((p, i) => `<div class="day"><b>Day ${esc(p.day ?? i + 1)}</b><div>${p.passage ? `<strong>${esc(p.passage)}</strong><br>` : ""}<span class="muted">${esc(p.prompt || "")}</span></div></div>`).join("")}</div>` : ""}
-${appCta("Follow along with this study in the app")}
+${appCta("Follow along with this study in the app", c.id)}
 <script>
 document.getElementById("share").addEventListener("click", async function () {
   var url = ${JSON.stringify(canonical)}, b = this;
