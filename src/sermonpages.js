@@ -55,7 +55,7 @@ function sermonDate(s) {
 }
 
 const coverPath = (name) => `/cover.png?title=${encodeURIComponent(String(name).slice(0, 80))}&sub=Sermons`;
-const coverUrl = (name) => `${PUBLIC_BASE}${coverPath(name)}`; // absolute: og:image / JSON-LD
+const coverUrl = (name) => `${PUBLIC_BASE}${coverPath(name)}&w=1200`; // absolute: og:image / JSON-LD (1200px JPEG)
 // Full official name (what people search for) for slugs, titles and headings; display_name is the app's short label.
 const churchName = (c) => c.name || c.display_name;
 const place = (c) => [c.city, c.state].filter(Boolean).join(", ");
@@ -133,7 +133,7 @@ function page({ title, description, canonical, image, type = "website", body, ld
 <meta property="og:description" content="${esc(description)}">
 <meta property="og:url" content="${esc(canonical)}">
 <meta property="og:image" content="${esc(image)}">
-<meta property="og:image:width" content="1400"><meta property="og:image:height" content="1400">
+<meta property="og:image:width" content="1200"><meta property="og:image:height" content="1200">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="${esc(title)}"><meta name="twitter:description" content="${esc(description)}"><meta name="twitter:image" content="${esc(image)}">
 <meta name="apple-itunes-app" content="app-id=6797073366">
@@ -277,7 +277,7 @@ export function mountSermonPages(app) {
         ld: { "@context": "https://schema.org", "@type": "Church", name, url: `${PUBLIC_BASE}/church/${c.slug}`, image: coverUrl(name),
           ...(c.website ? { sameAs: [c.website] } : {}),
           ...(where ? { address: { "@type": "PostalAddress", addressLocality: c.city || undefined, addressRegion: c.state || undefined } } : {}) },
-        body: `<div class="hero"><img src="${esc(coverPath(name))}" alt="${esc(name)} sermons" width="120" height="120">
+        body: `<div class="hero"><img src="${esc(coverPath(name))}&amp;w=240" alt="${esc(name)} sermons" width="120" height="120">
           <div><h1>${esc(name)}</h1><p class="muted">${esc([c.denomination, where].filter(Boolean).join(" · "))}${c.website ? ` · <a href="${esc(c.website)}" rel="noopener">Website</a>` : ""}</p></div></div>
           <p>${esc(desc)}</p>
           <h3>Subscribe</h3><div class="btns">${subscribe}</div>
@@ -317,7 +317,7 @@ export function mountSermonPages(app) {
 
       const body = `
 <p class="small"><a href="/church/${esc(c.slug)}">← ${esc(name)}</a></p>
-<div class="hero"><img src="${esc(coverPath(name))}" alt="${esc(name)}" width="120" height="120">
+<div class="hero"><img src="${esc(coverPath(name))}&amp;w=240" alt="${esc(name)}" width="120" height="120">
 <div><h1>${esc(title)}</h1><p class="muted">${esc([d.label, speaker].filter(Boolean).join(" · "))}</p></div></div>
 ${audioSrc ? `<div class="card"><audio controls preload="none" src="${esc(audioSrc)}"></audio></div>` : ""}
 ${s.video_id ? `<div class="video"><iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(s.video_id)}${start ? `?start=${start}` : ""}" title="${esc(title)} video" loading="lazy" allow="accelerometer; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>` : ""}

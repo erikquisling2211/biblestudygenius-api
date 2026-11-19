@@ -224,6 +224,22 @@ export function mountVerseImage(app) {
       const key = `cover|${bgIdx}|${subtitle}|${title}`;
       let png = cacheGet(key);
       if (!png) { png = renderCover({ title, subtitle, bg: bgs[bgIdx] || null }); cacheSet(key, png); }
+      // Optional ?w=<px> (64–1400): smaller JPEG for web thumbnails; default stays the 1400px PNG (podcast art).
+      const w = parseInt(req.query.w, 10);
+      if (Number.isFinite(w) && w >= 64 && w < 1400) {
+        const skey = `${key}|w${w}`;
+        let small = cacheGet(skey);
+        if (!small) {
+          const img = await loadImage(png);
+          const c = createCanvas(w, w);
+          c.getContext("2d").drawImage(img, 0, 0, w, w);
+          small = c.toBuffer("image/jpeg", 82);
+          cacheSet(skey, small);
+        }
+        res.set("Content-Type", "image/jpeg");
+        res.set("Cache-Control", "public, max-age=86400");
+        return res.send(small);
+      }
       res.set("Content-Type", "image/png");
       res.set("Cache-Control", "public, max-age=86400");
       res.send(png);
