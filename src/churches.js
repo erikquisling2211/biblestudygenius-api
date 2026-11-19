@@ -383,15 +383,22 @@ async function processFirstSermon(church) {
 // Create a paid church end-to-end: insert the row (active), wire its detected source,
 // process the first sermon so it's live immediately, and provision a dashboard login.
 // Returns { churchId, tempPassword }. Called by the Stripe webhook after payment clears.
-async function onboardChurch({ name, city, state, email, sourceType, sourceUrl, stripeCustomerId, stripeSubscriptionId }) {
+// A giving link must be a plain http(s) URL; anything else is dropped.
+function cleanGivingUrl(u) {
+  let v = String(u || "").trim();
+  if (v && !/^[a-z][a-z0-9+.-]*:/i.test(v) && /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(v)) v = "https://" + v; // "church.org/give"
+  return /^https?:\/\/\S+$/i.test(v) && v.length <= 500 ? v : null;
+}
+
+async function onboardChurch({ name, city, state, email, sourceType, sourceUrl, givingUrl, stripeCustomerId, stripeSubscriptionId }) {
   const feedUrl = sourceType === "feed" ? sourceUrl : null;
   const youtubeUrl = sourceType === "youtube" ? sourceUrl : null;
   const scrapeUrl = sourceType === "scrape" ? sourceUrl : null;
   const ins = await pool.query(
-    `INSERT INTO churches (name,city,state,feed_url,youtube_url,scrape_url,contact_email,stripe_customer_id,stripe_subscription_id,active,created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10) RETURNING *`,
+    `INSERT INTO churches (name,city,state,feed_url,youtube_url,scrape_url,contact_email,stripe_customer_id,stripe_subscription_id,giving_url,active,created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,$11) RETURNING *`,
     [name || "New Church", city || null, state || null, feedUrl, youtubeUrl, scrapeUrl,
-     email || null, stripeCustomerId || null, stripeSubscriptionId || null, Date.now()]
+     email || null, stripeCustomerId || null, stripeSubscriptionId || null, cleanGivingUrl(givingUrl), Date.now()]
   );
   const church = ins.rows[0];
   await ensureSmartLink(church.id); // smart deep link, stored on the church
@@ -1045,7 +1052,12 @@ export function mountChurches(app) {
     const url = String(b.url || b.website || "").trim();
     if (!name || !email || !url) return res.status(400).json({ error: "name, email, and url required" });
     try {
-      const det = await detectSermonSource(url);
+      // Giving link: use the one they gave us, else look for one on their site (same detector the dashboard uses).
+      const [det, givingDet] = await Promise.all([
+        detectSermonSource(url),
+        cleanGivingUrl(b.giving_url || b.givingUrl) ? Promise.resolve(null) : detectGivingUrl(url).catch(() => ({ found: false })),
+      ]);
+      const givingUrl = cleanGivingUrl(b.giving_url || b.givingUrl) || (givingDet && givingDet.found ? cleanGivingUrl(givingDet.givingUrl) : null);
       if (!det.found) return res.json({ found: false }); // → site shows "we'll set you up within 24h"
       if (!stripe || !process.env.STRIPE_PRICE_ID) return res.status(503).json({ found: true, error: "billing not configured" });
       const session = await stripe.checkout.sessions.create({
@@ -1057,11 +1069,12 @@ export function mountChurches(app) {
         metadata: {
           name, city: String(b.city || ""), state: String(b.state || ""), email,
           sourceType: det.sourceType, sourceUrl: det.sourceUrl,
+          givingUrl: givingUrl || "",
         },
         success_url: `${SITE_URL}/welcome?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${SITE_URL}/for-churches`,
       });
-      res.json({ found: true, sourceType: det.sourceType, sampleSermons: det.sampleSermons, checkoutUrl: session.url });
+      res.json({ found: true, sourceType: det.sourceType, sampleSermons: det.sampleSermons, givingUrl, checkoutUrl: session.url });
     } catch (e) {
       console.error("POST /signup", e);
       res.status(500).json({ error: String((e && e.message) || e) });
@@ -1094,7 +1107,7 @@ export function mountChurches(app) {
             const email = (session.customer_details && session.customer_details.email) || session.customer_email || md.email || "";
             await onboardChurch({
               name: md.name, city: md.city, state: md.state, email,
-              sourceType: md.sourceType, sourceUrl: md.sourceUrl,
+              sourceType: md.sourceType, sourceUrl: md.sourceUrl, givingUrl: md.givingUrl,
               stripeCustomerId: session.customer, stripeSubscriptionId: session.subscription,
             });
           }
