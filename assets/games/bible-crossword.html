@@ -16,8 +16,8 @@
   .tools{display:flex;gap:6px}
   .tools button{background:#2a2235;color:var(--ink);border:1px solid var(--edge);border-radius:9px;min-width:36px;height:36px;padding:0 10px;font-size:13px;font-weight:600;cursor:pointer;display:grid;place-items:center}
   .tools button:active{filter:brightness(1.25)}
-  .gridwrap{width:100%;max-width:min(80vw,360px);aspect-ratio:1;display:grid;grid-template-columns:repeat(7,1fr);gap:3px;flex:none}
-  .cell{position:relative;border-radius:5px;display:grid;place-items:center;font-weight:700;font-size:clamp(15px,5.4vw,26px);color:var(--cream-txt);background:var(--cream)}
+  .gridwrap{width:100%;max-width:min(80vw,360px);aspect-ratio:1;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-template-rows:repeat(7,minmax(0,1fr));gap:3px;flex:none}
+  .cell{position:relative;min-width:0;min-height:0;aspect-ratio:1;border-radius:5px;display:grid;place-items:center;font-weight:700;font-size:clamp(15px,5.4vw,26px);color:var(--cream-txt);background:var(--cream)}
   .cell.block{background:transparent;pointer-events:none}
   .cell.hl{background:#f6e6a8}
   .cell.sel{background:var(--gold);box-shadow:0 0 0 2px #fff6 inset}
