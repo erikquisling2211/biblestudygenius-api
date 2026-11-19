@@ -1,3 +1,5 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Walls of Jericho</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=Inter:wght@400;500;600&display=swap">
@@ -10,7 +12,7 @@
     color:var(--ink); font-family:Inter,system-ui,sans-serif;
     display:flex; align-items:stretch; justify-content:center;
     padding-left:max(16px,env(safe-area-inset-left,0px)); padding-right:max(16px,env(safe-area-inset-right,0px));
-    padding-block:16px; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+    padding-top:calc(env(safe-area-inset-top,0px) + 70px); padding-bottom:calc(8px + env(safe-area-inset-bottom,0px)); box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
   }
   .stage{width:100%; max-width:900px; height:100%; display:flex; flex-direction:column; gap:10px; min-height:0}
   .hud{display:flex; align-items:center; gap:10px; justify-content:space-between;
@@ -437,7 +439,7 @@
     particles=particles.filter(p=>{ if(p.life<=0){ scene.remove(p.pts); return false; } return true; }); }
 
   function win(){
-    state.phase='won'; rubbleS(); timeScale=0.28; camTarget=new THREE.Vector3(LOOKAT.x+1, LOOKAT.y+1, 13);
+    state.phase='won'; timeScale=0.28; camTarget=new THREE.Vector3(LOOKAT.x+1, LOOKAT.y+1, 13);
     const L=LEVELS[state.li], last=state.li>=LEVELS.length-1, used=L.blasts-state.blasts;
     const stars=used<=L.par?3:used<=L.par+2?2:1;
     setTimeout(()=>{ timeScale=1;
