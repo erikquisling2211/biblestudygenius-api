@@ -9,6 +9,7 @@ import { mountVerseImage } from "./verseimage.js";
 import { mountLocalSermons } from "./localsermons.js";
 import { mountSermonProcess } from "./sermonprocess.js";
 import { mountChurches } from "./churches.js";
+import { mountSermonPages } from "./sermonpages.js";
 
 const app = express();
 app.use(cors());
@@ -19,6 +20,7 @@ mountVerseImage(app);
 mountLocalSermons(app);
 mountSermonProcess(app);
 mountChurches(app);
+mountSermonPages(app); // public SEO pages (sermons.biblestudygenius.com) — after churches.js
 
 app.get("/", (_req, res) => res.json({ ok: true, service: "biblestudygenius-api" }));
 app.get("/health", (_req, res) => res.json({ ok: true }));
