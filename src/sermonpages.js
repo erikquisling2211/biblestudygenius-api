@@ -203,7 +203,7 @@ ${body}
 //  - Google Play: install referrer "church_<id>" — the app reads it on first launch.
 //  - App Store: the tap copies "bsg-church:<id>" to the clipboard; on first launch the iOS app
 //    offers "Were you looking for <church>?" (the App Store can't pass data through an install).
-const appCta = (heading = "Get the Bible Study Genius app", churchId = null) => {
+const appCta = (heading = "Get the Bible Study Genius app", churchId = null, churchLabel = "") => {
   const cid = Number.isInteger(churchId) ? churchId : null;
   const play = cid ? `${PLAY_STORE_URL}&referrer=${encodeURIComponent(`church_${cid}`)}` : PLAY_STORE_URL;
   const ios = cid ? ` data-church="${cid}"` : "";
@@ -212,7 +212,8 @@ const appCta = (heading = "Get the Bible Study Genius app", churchId = null) => 
 <p class="muted small">Follow your church, listen to every sermon, and get a daily reading plan for the week.</p>
 <div class="btns" style="justify-content:center">
 <a class="btn primary" href="${APP_STORE_URL}"${ios} rel="noopener">Download on the App Store</a>
-<a class="btn" href="${esc(play)}" rel="noopener">Get it on Google Play</a></div></div>${cid ? `
+<a class="btn" href="${esc(play)}" rel="noopener">Get it on Google Play</a></div>${cid && churchLabel ? `
+<p class="muted small" style="margin:12px 0 0">After installing, if the app doesn't open to ${esc(churchLabel)}, tap <strong>My Church</strong> and search &ldquo;${esc(churchLabel)}&rdquo;.</p>` : ""}</div>${cid ? `
 <script>document.querySelectorAll('a[data-church]').forEach(function(a){a.addEventListener('click',function(e){
 var t='bsg-church:'+a.getAttribute('data-church'),h=a.href;
 if(!navigator.clipboard||!navigator.clipboard.writeText)return;e.preventDefault();
@@ -339,7 +340,7 @@ export function mountSermonPages(app) {
           <h3>Subscribe</h3><div class="btns">${subscribe}</div>
           <h2>Recent sermons</h2>
           <div class="card"><ul class="list">${items || `<li class="muted" style="padding:12px 0">New sermons will appear here soon.</li>`}</ul></div>
-          ${appCta(`Follow ${name} in the app`, c.id)}`,
+          ${appCta(`Follow ${name} in the app`, c.id, name)}`,
       }));
     } catch (e) { console.error("GET /church/:slug", e); res.status(500).send("error"); }
   });
@@ -384,7 +385,7 @@ ${s.summary ? `<div class="card"><h3>Summary</h3><p>${esc(s.summary)}</p></div>`
 ${scriptures.length ? `<div class="card"><h3>Key scripture</h3>${scriptures.map((x) => `<span class="pill">${esc(x)}</span>`).join("")}</div>` : ""}
 ${questions.length ? `<div class="card"><h3>Discussion questions</h3><ol>${questions.map((q) => `<li>${esc(q)}</li>`).join("")}</ol></div>` : ""}
 ${plan.length ? `<h2>Reading plan for the week</h2><div class="card">${plan.map((p, i) => `<div class="day"><b>Day ${esc(p.day ?? i + 1)}</b><div>${p.passage ? `<strong>${esc(p.passage)}</strong><br>` : ""}<span class="muted">${esc(p.prompt || "")}</span></div></div>`).join("")}</div>` : ""}
-${appCta("Follow along with this study in the app", c.id)}
+${appCta("Follow along with this study in the app", c.id, name)}
 <script>
 document.getElementById("share").addEventListener("click", async function () {
   var url = ${JSON.stringify(canonical)}, b = this;
