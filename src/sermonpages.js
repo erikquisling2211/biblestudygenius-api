@@ -55,7 +55,8 @@ function sermonDate(s) {
 }
 
 const coverUrl = (name) => `${PUBLIC_BASE}/cover.png?title=${encodeURIComponent(String(name).slice(0, 80))}&sub=Sermons`;
-const churchName = (c) => c.display_name || c.name;
+// Full official name (what people search for) for slugs, titles and headings; display_name is the app's short label.
+const churchName = (c) => c.name || c.display_name;
 const place = (c) => [c.city, c.state].filter(Boolean).join(", ");
 const asArray = (v) => (Array.isArray(v) ? v : []);
 
