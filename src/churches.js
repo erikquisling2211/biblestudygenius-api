@@ -478,6 +478,22 @@ async function processAllChurches() {
   const out = [];
   for (const ch of rows) {
     try {
+      // Read the feed's newest episode first (free) and skip it if we already have it. Transcribing is
+      // the costly step, and re-saving an unchanged sermon would also reset its quiz scores and analytics.
+      try {
+        const ep = await latestEpisode(ch.feed_url, 0);
+        if (ep && (ep.audio || ep.date)) {
+          const have = await pool.query(
+            `SELECT id FROM sermons WHERE church_id = $1 AND (($2::text IS NOT NULL AND audio_url = $2) OR ($3::text IS NOT NULL AND sermon_date = $3)) LIMIT 1`,
+            [ch.id, ep.audio || null, ep.date || null]
+          );
+          if (have.rows.length) {
+            out.push({ church: ch.id, name: ch.name, skipped: true, sermonId: have.rows[0].id });
+            console.log(`↳ ${ch.name}: newest episode already processed (sermon ${have.rows[0].id})`);
+            continue;
+          }
+        }
+      } catch (e) { console.error(`cron feed check ${ch.name}:`, (e && e.message) || e); } // fall through and process
       const result = await processPodcastFeed(ch.feed_url);
       if (result.error) { out.push({ church: ch.id, name: ch.name, error: result.error }); continue; }
       const sermonId = await saveSermon(ch.id, result, {});
