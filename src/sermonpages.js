@@ -260,6 +260,36 @@ export function mountSermonPages(app) {
     } catch (e) { console.error("GET /c/:id", e); res.redirect(302, "/churches"); }
   });
 
+  // Smart "get the app" link used by every share in the app (verses, sermons, Share this App).
+  // The app can't know the recipient's phone, so this decides at tap time:
+  //   iPhone/iPod/iPad → App Store · Android → Google Play · anything else → page with both buttons
+  //   (that page's script also sends iPads that report a Mac user agent to the App Store).
+  // Link-preview crawlers get the page so iMessage/WhatsApp/Facebook show a proper card.
+  // Optional ?src=votd|verse|app|sermon|verdle is only logged, to see which shares bring installs.
+  const PREVIEW_BOT = /bot|crawl|spider|facebookexternalhit|facebot|whatsapp|telegram|slack|discord|linkedin|embedly|preview|skype|pinterest/i;
+  app.get("/get", (req, res) => {
+    const ua = String(req.get("user-agent") || "");
+    const src = String(req.query.src || "").replace(/[^a-z0-9_-]/gi, "").slice(0, 20);
+    res.set("Vary", "User-Agent");
+    if (!PREVIEW_BOT.test(ua)) {
+      const os = /iPhone|iPod|iPad/i.test(ua) ? "ios" : /Android/i.test(ua) ? "android" : "";
+      console.log(`GET /get src=${src || "-"} os=${os || "other"}`);
+      if (os) {
+        res.set("Cache-Control", "no-store");
+        const play = src ? `${PLAY_STORE_URL}&referrer=${encodeURIComponent(`utm_source=share&utm_content=${src}`)}` : PLAY_STORE_URL;
+        return res.redirect(302, os === "ios" ? APP_STORE_URL : play);
+      }
+    }
+    send(res, page({
+      title: "Bible Study Genius — free Bible app for iPhone & Android",
+      description: "Read and listen in 12 translations, study the original Greek and Hebrew, follow your church's sermon, and play Bible games. Free, no ads.",
+      canonical: `${PUBLIC_BASE}/get`,
+      image: coverUrl("Bible Study Genius"),
+      body: `${appCta("Get Bible Study Genius — free")}
+<script>if(/Macintosh/.test(navigator.userAgent)&&navigator.maxTouchPoints>1){location.replace(${JSON.stringify(APP_STORE_URL)});}</script>`,
+    }), 300);
+  });
+
   app.get("/robots.txt", (_req, res) => {
     res.type("text/plain").set("Cache-Control", "public, max-age=86400")
       .send(`User-agent: *\nAllow: /\nDisallow: /admin\n\nSitemap: ${PUBLIC_BASE}/sitemap.xml\n`);
