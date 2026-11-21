@@ -154,7 +154,7 @@ function win(){ let played=load(SK,[]); const isDaily=DAILY_PI===pi; const first
   document.getElementById('ovTitle').textContent = reveals===0 ? 'Perfect!' : 'Solved!';
   document.getElementById('ovIq').innerHTML = (first||isDaily) ? ('+'+iq+' Scripture IQ'+(reveals? '<small>'+reveals+' reveal'+(reveals>1?'s':'')+' used</small>' : '<small>No reveals used</small>')) : '';
   confetti(); document.getElementById('ovVerse').textContent=P.verse; document.getElementById('ovCite').textContent=P.cite;
-  document.getElementById('ovBtn').textContent='Next puzzle →'; document.getElementById('overlay').classList.add('show'); }
+  document.getElementById('ovBtn').textContent = DAILY_PI===pi ? 'Done — new puzzle tomorrow' : 'Next puzzle →'; document.getElementById('overlay').classList.add('show'); }
 // Wrong letters get a red box that stays until that square is changed or revealed.
 let badSet=new Set();
 let reveals=0; // Reveal taps that fixed a letter on this puzzle (Restart keeps the count, so it can't wipe reveals)
@@ -189,7 +189,7 @@ document.addEventListener('keydown',e=>{ if(/^[a-zA-Z]$/.test(e.key))type(e.key.
 document.getElementById('checkBtn').onclick=doCheck;
 document.getElementById('revealBtn').onclick=revealLetter;
 document.getElementById('restartBtn').onclick=()=>{ user=P.cells.map(row=>row.map(c=>c?'':null)); badSet=new Set(); render(); };
-document.getElementById('ovBtn').onclick=()=>{ document.getElementById('overlay').classList.remove('show'); pi=pickNext(pi); save(CK,pi); buildPuzzle(); };
+document.getElementById('ovBtn').onclick=()=>{ if(DAILY_PI===pi){ try{ window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({type:'close'})); }catch(e){} return; } document.getElementById('overlay').classList.remove('show'); pi=pickNext(pi); save(CK,pi); buildPuzzle(); };
 const DAILY_PI=DAILY?((Math.floor(Date.UTC(+DAILY.slice(0,4),+DAILY.slice(5,7)-1,+DAILY.slice(8,10))/86400000)%PUZZLES.length)+PUZZLES.length)%PUZZLES.length:-1;
 if(DAILY_PI>=0){pi=DAILY_PI;}else{pi=load(CK,-1); if(!(pi>=0&&pi<PUZZLES.length)){pi=pickNext(-1); save(CK,pi);}} buildPuzzle();
 </script>
