@@ -88,7 +88,7 @@ const PLAN_PROMPT = `You are a Bible study assistant for a church app. Given a s
 }
 "plan" must have exactly 5 days, each a passage that deepens the sermon's theme. Do not invent quotes.`;
 
-async function studyPlan(text) {
+async function planOnly(text) {
   const r = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     response_format: { type: "json_object" },
@@ -98,6 +98,71 @@ async function studyPlan(text) {
     ],
   });
   return JSON.parse(r.choices[0].message.content);
+}
+
+/* ---------- weekly sermon quiz (shown at the bottom of the church page in the app) ---------- */
+const QUIZ_PROMPT = `You write a short comprehension quiz for people who heard this sermon. Reply with JSON only:
+{"quiz":[{"q":"question","options":["correct answer","wrong","wrong","wrong"],"explain":"one sentence on why, drawn from the sermon","ref":"Bible reference if the question is about a passage, else empty"}]}
+Rules: exactly 5 questions. Ask about what THIS sermon actually said: its main point, the passage it preached on, its illustrations and its practical challenge. Never ask about things the sermon did not say.
+Each question has exactly 4 short options; the FIRST option is the correct one (it will be shuffled later). Wrong options must be plausible but clearly wrong to someone who listened.
+Keep questions under 25 words and options under 12 words. Do not invent quotes. Do not ask about the preacher's name, the date or the church.`;
+
+function shuffleArr(a) {
+  a = a.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+// Keep only well-formed questions; shuffle options and record the correct index.
+export function normalizeQuiz(raw) {
+  const out = [];
+  for (const item of Array.isArray(raw) ? raw : []) {
+    const q = String(item?.q || "").trim();
+    const opts = (Array.isArray(item?.options) ? item.options : []).map((o) => String(o || "").trim()).filter(Boolean);
+    if (!q || opts.length !== 4 || new Set(opts.map((o) => o.toLowerCase())).size !== 4) continue;
+    const correct = opts[0];
+    const options = shuffleArr(opts);
+    out.push({ q, options, answer: options.indexOf(correct), explain: String(item?.explain || "").trim(), ref: String(item?.ref || "").trim() });
+    if (out.length === 5) break;
+  }
+  return out.length >= 3 ? out : [];
+}
+
+export async function sermonQuiz(text) {
+  if (!text || text.length < 500) return [];
+  const r = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: QUIZ_PROMPT },
+      { role: "user", content: text.slice(0, 48000) },
+    ],
+  });
+  return normalizeQuiz(JSON.parse(r.choices[0].message.content).quiz);
+}
+
+// Study plan + weekly quiz from one transcript. The quiz never blocks the plan: a quiz failure
+// just leaves it empty. The transcript rides along so the quiz can be regenerated later.
+async function studyPlan(text) {
+  const [plan, quiz] = await Promise.all([
+    planOnly(text),
+    sermonQuiz(text).catch((e) => { console.error("sermon quiz", (e && e.message) || e); return []; }),
+  ]);
+  return { ...plan, quiz, transcript: text };
+}
+
+// Download + transcribe any sermon audio URL (used to backfill quizzes for already-processed sermons).
+export async function transcribeAudioUrl(audioUrl) {
+  const stamp = Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+  const raw = path.join(os.tmpdir(), `bf_${stamp}.mp3`);
+  const small = path.join(os.tmpdir(), `bf_${stamp}.m4a`);
+  try {
+    await downloadTo(audioUrl, raw);
+    await toWhisperAudio(raw, small);
+    return await transcribePlain(small);
+  } finally {
+    fs.unlink(raw).catch(() => {});
+    fs.unlink(small).catch(() => {});
+  }
 }
 
 /* ---------- podcast (audio, already just the sermon) ---------- */
@@ -329,56 +394,193 @@ export async function detectGivingUrl(pageUrl) {
   return { found: false };
 }
 
-/* ---------- church events (Google Calendar / iCal feed) ---------- */
-const _ICS_DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const _ICS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/* ---------- church events (ICS feed: Google Calendar, Planning Center, any iCal) ---------- */
+// Times are shown in the calendar's own time zone (TZID / X-WR-TIMEZONE, default Central),
+// and startMs is the true instant so the app can set reminders. Simple repeating events
+// (daily / weekly / monthly / yearly RRULEs) are expanded, with EXDATE and moved instances.
+export const DEFAULT_TZ = "America/Chicago";
+const _ICS_DAYS = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
 function icalUnescape(s) {
-  return String(s || "").replace(/\\n/gi, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").replace(/\\\\/g, "\\").trim();
+  return String(s || "").replace(/\\n/gi, " ").replace(/\\,/g, ",").replace(/\;/g, ";").replace(/\\\\/g, "\\").replace(/\s+/g, " ").trim();
 }
-function parseIcalDate(line) {
-  const allDay = /VALUE=DATE(?!-TIME)/i.test(line);
-  const m = line.match(/:(\d{8})(?:T(\d{2})(\d{2})(\d{2}))?/);
+function validTz(tz) {
+  if (!tz) return null;
+  try { new Intl.DateTimeFormat("en-US", { timeZone: tz }); return tz; } catch { return null; }
+}
+// Wall-clock parts of an instant in a time zone.
+function wallOf(ms, tz) {
+  const p = {};
+  for (const x of new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric" }).formatToParts(new Date(ms))) p[x.type] = +x.value;
+  return { Y: p.year, Mo: p.month, D: p.day, H: p.hour % 24, Mi: p.minute };
+}
+const wallMs = (w) => Date.UTC(w.Y, w.Mo - 1, w.D, w.H || 0, w.Mi || 0);
+const msWall = (ms) => { const d = new Date(ms); return { Y: d.getUTCFullYear(), Mo: d.getUTCMonth() + 1, D: d.getUTCDate(), H: d.getUTCHours(), Mi: d.getUTCMinutes() }; };
+// Wall-clock time in a zone -> the real instant.
+export function zonedToEpoch(w, tz) {
+  const guess = wallMs(w);
+  const off1 = wallMs(wallOf(guess, tz)) - guess;
+  const t = guess - off1;
+  const off2 = wallMs(wallOf(t, tz)) - t;
+  return guess - off2;
+}
+export function fmtWhen(startMs, allDay, tz) {
+  const opts = allDay
+    ? { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }
+    : { timeZone: tz, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+  return new Intl.DateTimeFormat("en-US", opts).format(new Date(startMs)).replace(/,(?= \d{1,2}:)/, " ·").replace(/ at /, " · ");
+}
+// "DTSTART;TZID=America/Chicago:20261122T090000" -> { wall, allDay, tz }
+function parseIcalProp(line, calTz) {
+  if (!line) return null;
+  const allDay = /VALUE=DATE(?!-TIME)/i.test(line) || /:\d{8}\s*$/.test(line);
+  const m = line.match(/:(\d{8})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?/);
   if (!m) return null;
-  const Y = +m[1].slice(0, 4), Mo = +m[1].slice(4, 6), D = +m[1].slice(6, 8);
-  const H = m[2] ? +m[2] : 0, Mi = m[3] ? +m[3] : 0;
-  return { Y, Mo, D, H, Mi, allDay, startMs: Date.UTC(Y, Mo - 1, D, H, Mi) };
+  const w = { Y: +m[1].slice(0, 4), Mo: +m[1].slice(4, 6), D: +m[1].slice(6, 8), H: m[2] ? +m[2] : 0, Mi: m[3] ? +m[3] : 0 };
+  if (allDay) return { wall: { ...w, H: 0, Mi: 0 }, allDay: true };
+  if (m[5]) return { wall: wallOf(wallMs(w), calTz), allDay: false }; // UTC -> calendar's local time
+  const tzid = validTz(((line.match(/TZID=([^;:]+)/i) || [])[1] || "").replace(/^"|"$/g, ""));
+  if (tzid && tzid !== calTz) return { wall: wallOf(zonedToEpoch(w, tzid), calTz), allDay: false };
+  return { wall: w, allDay: false };
 }
-function fmtEventWhen(d) {
-  const dow = _ICS_DOW[new Date(Date.UTC(d.Y, d.Mo - 1, d.D)).getUTCDay()];
-  const base = `${dow}, ${_ICS_MON[d.Mo - 1]} ${d.D}`;
-  if (d.allDay) return base;
-  let h = d.H % 12; if (h === 0) h = 12;
-  return `${base} · ${h}:${String(d.Mi).padStart(2, "0")} ${d.H < 12 ? "AM" : "PM"}`;
+const wallKey = (w) => `${w.Y}${String(w.Mo).padStart(2, "0")}${String(w.D).padStart(2, "0")}T${String(w.H).padStart(2, "0")}${String(w.Mi).padStart(2, "0")}`;
+const dayKeyOf = (w) => wallKey(w).slice(0, 8);
+
+// Expand an RRULE into wall-clock starts between [fromWall, toWall] (wall ms). Capped, best effort.
+function expandRrule(rule, start, fromMs, toMs) {
+  const r = {};
+  for (const part of rule.split(";")) { const [k, v] = part.split("="); if (k && v) r[k.toUpperCase()] = v; }
+  const freq = r.FREQ, interval = Math.max(1, parseInt(r.INTERVAL || "1", 10) || 1);
+  const count = r.COUNT ? parseInt(r.COUNT, 10) : Infinity;
+  let untilMs = Infinity;
+  if (r.UNTIL) { const u = r.UNTIL.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2}))?/); if (u) untilMs = Date.UTC(+u[1], +u[2] - 1, +u[3], u[4] ? +u[4] : 23, u[5] ? +u[5] : 59); }
+  const byday = (r.BYDAY || "").split(",").filter(Boolean);
+  const out = [];
+  let n = 0;
+  const startMs = wallMs(start);
+  const push = (ms) => {
+    if (ms < startMs) return true;
+    if (ms > untilMs || n >= count) return false;
+    n++;
+    if (ms >= fromMs && ms <= toMs) out.push(msWall(ms));
+    return ms <= toMs;
+  };
+  const DAY = 86400000;
+  if (freq === "DAILY") {
+    for (let i = 0, ms = startMs; i < 2000; i++, ms += interval * DAY) if (!push(ms)) break;
+  } else if (freq === "WEEKLY") {
+    const days = byday.length ? byday.map((d) => _ICS_DAYS.indexOf(d.slice(-2))).filter((d) => d >= 0).sort() : [new Date(startMs).getUTCDay()];
+    const weekStart = startMs - new Date(startMs).getUTCDay() * DAY;
+    outer: for (let wk = 0; wk < 600; wk++) {
+      for (const d of days) { if (!push(weekStart + (wk * interval * 7 + d) * DAY)) break outer; }
+    }
+  } else if (freq === "MONTHLY") {
+    const nth = byday.length === 1 ? byday[0].match(/^([+-]?\d)?(SU|MO|TU|WE|TH|FR|SA)$/) : null;
+    const bymd = r.BYMONTHDAY ? parseInt(r.BYMONTHDAY, 10) : start.D;
+    for (let i = 0; i < 400; i++) {
+      const mi = start.Mo - 1 + i * interval;
+      const Y = start.Y + Math.floor(mi / 12), Mo = (mi % 12) + 1;
+      const dim = new Date(Date.UTC(Y, Mo, 0)).getUTCDate();
+      let D;
+      if (nth && nth[1]) {
+        const want = _ICS_DAYS.indexOf(nth[2]), k = parseInt(nth[1], 10);
+        if (k > 0) { const first = new Date(Date.UTC(Y, Mo - 1, 1)).getUTCDay(); D = 1 + ((want - first + 7) % 7) + (k - 1) * 7; }
+        else { const last = new Date(Date.UTC(Y, Mo - 1, dim)).getUTCDay(); D = dim - ((last - want + 7) % 7) + (k + 1) * 7; }
+      } else D = bymd < 0 ? dim + bymd + 1 : bymd;
+      if (D < 1 || D > dim) continue;
+      if (!push(Date.UTC(Y, Mo - 1, D, start.H, start.Mi))) break;
+    }
+  } else if (freq === "YEARLY") {
+    for (let i = 0; i < 50; i++) if (!push(Date.UTC(start.Y + i * interval, start.Mo - 1, start.D, start.H, start.Mi))) break;
+  }
+  return out;
 }
-// Fetch a church's public iCal feed and return upcoming events, soonest first.
-export async function fetchIcsEvents(icalUrl, { limit = 20 } = {}) {
-  let url = String(icalUrl || "").trim();
-  if (!url) return { error: "no calendar url" };
+
+// Accept the forms churches paste: webcal://, Google Calendar embed/share links, Planning Center ICS links.
+export function normalizeCalendarUrl(input) {
+  let url = String(input || "").trim();
+  if (!url) return "";
   url = url.replace(/^webcal:/i, "https:");
+  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+  try {
+    const u = new URL(url);
+    if (/calendar\.google\.com$/i.test(u.hostname) && !/\/ical\//.test(u.pathname)) {
+      const src = u.searchParams.get("src") || u.searchParams.get("cid");
+      if (src) {
+        let id = src;
+        if (u.searchParams.get("cid")) { try { id = Buffer.from(src, "base64").toString("utf8") || src; } catch { /* keep */ } if (!/@/.test(id)) id = src; }
+        return `https://calendar.google.com/calendar/ical/${encodeURIComponent(id)}/public/basic.ics`;
+      }
+    }
+  } catch { /* leave as typed */ }
+  return url;
+}
+
+// Fetch a church's public iCal feed and return upcoming events, soonest first.
+export async function fetchIcsEvents(icalUrl, { limit = 20, days = 120, tz: fallbackTz = DEFAULT_TZ } = {}) {
+  const url = normalizeCalendarUrl(icalUrl);
+  if (!url) return { error: "no calendar url" };
   const res = await fetchViaProxyIfBlocked(url, { headers: { "User-Agent": BROWSER_UA } });
   if (!res.ok) return { error: "calendar " + res.status };
   let text = await res.text();
-  text = text.replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, ""); // unfold continuation lines
+  if (!/BEGIN:VCALENDAR/i.test(text)) return { error: "not a calendar feed" };
+  text = text.replace(/\r\n/g, "\n").replace(/\n[ \t]/g, ""); // unfold continuation lines
+  const calTz = validTz(((text.match(/(?:^|\n)X-WR-TIMEZONE[^:\n]*:([^\n]*)/i) || [])[1] || "").trim()) || validTz(fallbackTz) || DEFAULT_TZ;
   const now = Date.now();
+  const horizon = now + days * 86400000;
+  const nowWall = wallMs(wallOf(now, calTz)) - 2 * 86400000; // wall-clock window, a little slack
+  const horizonWall = wallMs(wallOf(horizon, calTz));
   const prop = (body, name) => { const m = body.match(new RegExp("(?:^|\\n)" + name + "[^:\\n]*:([^\\n]*)", "i")); return m ? m[1] : ""; };
+  const line = (body, name) => (body.match(new RegExp("(?:^|\\n)(" + name + "[;:][^\\n]*)", "i")) || [])[1] || "";
+  const blocks = text.split(/BEGIN:VEVENT/i).slice(1).map((b) => b.split(/END:VEVENT/i)[0]);
+  const moved = new Set(); // "uid|wallKey" instances replaced by a RECURRENCE-ID override
+  for (const body of blocks) {
+    const rid = parseIcalProp(line(body, "RECURRENCE-ID"), calTz);
+    if (rid) moved.add(prop(body, "UID") + "|" + (rid.allDay ? dayKeyOf(rid.wall) : wallKey(rid.wall)));
+  }
   const events = [];
-  for (const block of text.split(/BEGIN:VEVENT/i).slice(1)) {
-    const body = block.split(/END:VEVENT/i)[0];
-    const ds = parseIcalDate((body.match(/(?:^|\n)(DTSTART[^\n]*)/i) || [])[1] || "");
+  for (const body of blocks) {
+    if (/(?:^|\n)STATUS[^:\n]*:CANCELLED/i.test(body)) continue;
+    const ds = parseIcalProp(line(body, "DTSTART"), calTz);
     if (!ds) continue;
-    const de = parseIcalDate((body.match(/(?:^|\n)(DTEND[^\n]*)/i) || [])[1] || "");
-    const endMs = de ? de.startMs : (ds.allDay ? ds.startMs + 86400000 : ds.startMs + 3600000);
-    if (endMs < now) continue; // skip past events
-    events.push({
-      title: icalUnescape(prop(body, "SUMMARY")) || "Event",
-      when: fmtEventWhen(ds),
-      startMs: ds.startMs,
-      allDay: ds.allDay,
-      location: icalUnescape(prop(body, "LOCATION")),
-    });
+    const de = parseIcalProp(line(body, "DTEND"), calTz);
+    const durMs = de ? Math.max(0, wallMs(de.wall) - wallMs(ds.wall)) : (ds.allDay ? 86400000 : 3600000);
+    const uid = prop(body, "UID") || "";
+    const isOverride = !!line(body, "RECURRENCE-ID");
+    const rrule = prop(body, "RRULE");
+    let starts = [ds.wall];
+    if (rrule && !isOverride) {
+      const ex = new Set();
+      for (const m of body.matchAll(/(?:^|\n)(EXDATE[^\n]*)/gi)) {
+        const tzPart = m[1].split(":")[0];
+        for (const v of (m[1].split(":")[1] || "").split(",")) { const p = parseIcalProp(tzPart + ":" + v.trim(), calTz); if (p) ex.add(p.allDay ? dayKeyOf(p.wall) : wallKey(p.wall)); }
+      }
+      starts = expandRrule(rrule, ds.wall, nowWall - durMs, horizonWall).filter((w) => {
+        const k = ds.allDay ? dayKeyOf(w) : wallKey(w);
+        return !ex.has(k) && !moved.has(uid + "|" + k);
+      });
+    }
+    const title = icalUnescape(prop(body, "SUMMARY")) || "Event";
+    const location = icalUnescape(prop(body, "LOCATION"));
+    const description = icalUnescape(prop(body, "DESCRIPTION")).slice(0, 400);
+    for (const w of starts) {
+      const startMs = ds.allDay ? wallMs(w) : zonedToEpoch(w, calTz);
+      const endMs = ds.allDay ? startMs + durMs : startMs + durMs;
+      const realEnd = ds.allDay ? zonedToEpoch(msWall(wallMs(w) + durMs), calTz) : endMs;
+      if (realEnd < now || startMs > horizon) continue;
+      events.push({
+        id: "f_" + hashId(uid + "|" + wallKey(w)),
+        title, when: fmtWhen(startMs, ds.allDay, calTz), startMs, endMs, allDay: ds.allDay, tz: calTz,
+        location, description, source: "feed",
+      });
+    }
   }
   events.sort((a, b) => a.startMs - b.startMs);
-  return { count: events.length, events: events.slice(0, limit) };
+  return { count: events.length, tz: calTz, events: events.slice(0, limit) };
+}
+function hashId(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
 }
 
 // Captivate's CDN fingerprint-blocks Node's undici (404) but allows Python's urllib.

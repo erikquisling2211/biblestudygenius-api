@@ -11,7 +11,7 @@
  *   GET  /church/:id                   church detail + latest sermon (app)
  */
 import { pool } from "./db.js";
-import { processPodcastFeed, processYouTube, latestEpisode, searchYouTube, searchChannelVideos, processAudioUrl, scrapeWixSermons, detectSermonSource, detectGivingUrl, fetchIcsEvents } from "./sermonprocess.js";
+import { processPodcastFeed, processYouTube, latestEpisode, searchYouTube, searchChannelVideos, processAudioUrl, scrapeWixSermons, detectSermonSource, detectGivingUrl } from "./sermonprocess.js";
 import cron from "node-cron";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -21,6 +21,7 @@ import { fileURLToPath } from "url";
 import Stripe from "stripe";
 import QRCode from "qrcode";
 import { ensureSmartLink, shareLinkFor, mountSmartLinks } from "./smartlinks.js";
+import { mountChurchExtras, upcomingEvents, extraStats, hasUpcomingManualEvents } from "./churchextras.js";
 
 const CHURCH_JWT_SECRET = process.env.CHURCH_JWT_SECRET || process.env.ADMIN_TOKEN || "bsg-church-dev-secret";
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
@@ -166,6 +167,47 @@ async function initChurches() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS church_requests_idx ON church_requests(status, created_at DESC);`);
+  // Weekly sermon quiz (generated with the study plan) + the transcript it came from.
+  await pool.query(`ALTER TABLE sermons ADD COLUMN IF NOT EXISTS quiz JSONB;`);
+  await pool.query(`ALTER TABLE sermons ADD COLUMN IF NOT EXISTS transcript TEXT;`);
+  // Optional number on an engagement event (quiz_complete stores the score as a percent).
+  await pool.query(`ALTER TABLE sermon_events ADD COLUMN IF NOT EXISTS value INTEGER;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS sermon_events_type_idx ON sermon_events(church_id, type);`);
+  // The church's local time zone (events entered by hand are in this zone). Default Central.
+  await pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS timezone TEXT;`);
+  // Events a church enters by hand in the dashboard (shown alongside its calendar feed).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS church_events (
+      id SERIAL PRIMARY KEY,
+      church_id INTEGER NOT NULL REFERENCES churches(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      starts_at BIGINT NOT NULL,
+      ends_at BIGINT,
+      all_day BOOLEAN NOT NULL DEFAULT false,
+      location TEXT,
+      description TEXT,
+      created_at BIGINT NOT NULL
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS church_events_idx ON church_events(church_id, starts_at);`);
+  // Visitor Connect ("I'm New / Plan a Visit") submissions. Contact details only, visible to that
+  // church's dashboard logins and emailed to the church; never shown publicly.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS visitor_connects (
+      id SERIAL PRIMARY KEY,
+      church_id INTEGER NOT NULL REFERENCES churches(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      email TEXT,
+      phone TEXT,
+      visit_date TEXT,
+      message TEXT,
+      anon_id TEXT,
+      status TEXT NOT NULL DEFAULT 'new',
+      emailed_at BIGINT,
+      created_at BIGINT NOT NULL
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS visitor_connects_idx ON visitor_connects(church_id, created_at DESC);`);
   console.log("✅ Churches tables ready");
 }
 
@@ -215,6 +257,7 @@ async function churchStats(id) {
     downloads: downloads.rows[0].n,
     shares: shares.rows[0].n,
     topSermons: perSermon.rows,
+    ...(await extraStats(id)),
   };
 }
 
@@ -247,11 +290,12 @@ async function saveSermon(churchId, r, opts = {}) {
 
   const sermonTs = (date && Date.parse(date)) || Date.now();
   const s = await pool.query(
-    `INSERT INTO sermons (church_id,title,preacher,sermon_date,audio_url,summary,scriptures,plan,questions,video_id,sermon_start_sec,sermon_end_sec,sermon_ts,processed_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+    `INSERT INTO sermons (church_id,title,preacher,sermon_date,audio_url,summary,scriptures,plan,questions,video_id,sermon_start_sec,sermon_end_sec,sermon_ts,processed_at,quiz,transcript)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
     [churchId, r.title || null, null, date, audio, r.summary || null,
      JSON.stringify(r.scriptures || []), JSON.stringify(r.plan || []), JSON.stringify(r.questions || []),
-     videoId, startSec, endSec, sermonTs, Date.now()]
+     videoId, startSec, endSec, sermonTs, Date.now(),
+     Array.isArray(r.quiz) && r.quiz.length ? JSON.stringify(r.quiz) : null, r.transcript || null]
   );
   return s.rows[0].id;
 }
@@ -476,7 +520,8 @@ async function processAllChurches() {
 async function churchSermons(churchId, limit = 50) {
   const r = await pool.query(
     `SELECT id, title, preacher, sermon_date AS date, audio_url AS "audioUrl", summary, scriptures, plan, questions,
-            video_id AS "videoId", sermon_start_sec AS "sermonStartSec", sermon_end_sec AS "sermonEndSec", sermon_ts AS "sermonTs"
+            video_id AS "videoId", sermon_start_sec AS "sermonStartSec", sermon_end_sec AS "sermonEndSec", sermon_ts AS "sermonTs",
+            COALESCE(quiz, '[]'::jsonb) AS quiz
        FROM sermons WHERE church_id = $1 ORDER BY sermon_ts DESC NULLS LAST, processed_at DESC LIMIT $2`,
     [churchId, limit]
   );
@@ -547,6 +592,7 @@ ${items}
 export function mountChurches(app) {
   mountSmartLinks(app, { admin });
   initChurches().catch((e) => console.error("initChurches", e));
+  mountChurchExtras(app, { admin, churchAuth });
 
   // Serve brand imagery (sunrise photos, app icon) for the website — e.g.
   // /assets/votd/votd-sunrise.jpg, /assets/brand/icon.png
@@ -1160,16 +1206,17 @@ export function mountChurches(app) {
     }
   });
 
-  // Upcoming events for a church, parsed from its Google Calendar / iCal feed.
+  // Upcoming events for a church: its calendar feed (ICS / Google / Planning Center) merged with
+  // events entered by hand in the dashboard, soonest first.
   app.get("/church/:id/events", async (req, res) => {
     if (!/^\d+$/.test(String(req.params.id))) return res.status(404).json({ error: "not found" });
     try {
-      const c = await pool.query(`SELECT calendar_url FROM churches WHERE id = $1 AND active`, [parseInt(req.params.id, 10)]);
+      const c = await pool.query(`SELECT id, calendar_url, timezone FROM churches WHERE id = $1 AND active`, [parseInt(req.params.id, 10)]);
       if (!c.rows[0]) return res.status(404).json({ error: "church not found" });
-      if (!c.rows[0].calendar_url) return res.json({ count: 0, events: [] });
-      const r = await fetchIcsEvents(c.rows[0].calendar_url, { limit: 25 });
-      res.set("Cache-Control", "public, max-age=1800");
-      res.json(r.error ? { count: 0, events: [], error: r.error } : r);
+      const limit = Math.min(25, Math.max(1, parseInt(req.query.limit, 10) || 25));
+      const r = await upcomingEvents(c.rows[0], { limit });
+      res.set("Cache-Control", "public, max-age=900");
+      res.json(r);
     } catch (e) {
       console.error("GET /church/:id/events", e);
       res.status(500).json({ error: String((e && e.message) || e) });
@@ -1201,6 +1248,8 @@ export function mountChurches(app) {
                 (calendar_url IS NOT NULL) AS "hasEvents" FROM churches WHERE id = $1 AND active`, [id]
       );
       if (!c.rows[0]) return res.status(404).json({ error: "not found" });
+      if (!c.rows[0].hasEvents) c.rows[0].hasEvents = await hasUpcomingManualEvents(id);
+      c.rows[0].visitorConnect = true; // the app shows the "I'm New / Plan a Visit" card
       const sermons = await churchSermons(id, 50);
       res.json({ church: c.rows[0], sermon: sermons[0] || null, sermons });
     } catch (e) {
@@ -1209,7 +1258,8 @@ export function mountChurches(app) {
   });
 
   // --- Engagement analytics ---
-  const EVENT_TYPES = new Set(["follow", "unfollow", "play", "video_play", "plan_open", "download", "view", "share"]);
+  const EVENT_TYPES = new Set(["follow", "unfollow", "play", "video_play", "plan_open", "download", "view", "share",
+    "quiz_start", "quiz_complete", "event_view", "event_reminder", "visitor_open"]);
 
   // App posts anonymous engagement events here (no auth, no PII — just an anon device id).
   app.post("/events", async (req, res) => {
@@ -1220,9 +1270,11 @@ export function mountChurches(app) {
       if (!Number.isFinite(churchId) || !EVENT_TYPES.has(type)) return res.status(400).json({ error: "bad event" });
       const sermonId = Number.isFinite(parseInt(b.sermonId, 10)) ? parseInt(b.sermonId, 10) : null;
       const anonId = String(b.anonId || "").slice(0, 64) || null;
+      const v = parseInt(b.value, 10);
+      const value = Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : null;
       await pool.query(
-        `INSERT INTO sermon_events (church_id, sermon_id, type, anon_id, created_at) VALUES ($1,$2,$3,$4,$5)`,
-        [churchId, sermonId, type, anonId, Date.now()]
+        `INSERT INTO sermon_events (church_id, sermon_id, type, anon_id, created_at, value) VALUES ($1,$2,$3,$4,$5,$6)`,
+        [churchId, sermonId, type, anonId, Date.now(), value]
       );
       res.json({ ok: true });
     } catch (e) {
