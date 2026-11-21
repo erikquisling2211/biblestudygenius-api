@@ -40,6 +40,8 @@
   .key.wide{flex:1.5;max-width:66px;font-size:15px}
   .overlay{position:fixed;inset:0;display:none;place-items:center;text-align:center;background:radial-gradient(90% 90% at 50% 40%,#140f1dcc,#0b0810f2);padding:24px;z-index:20}
   .overlay.show{display:grid}
+  .card .iqline{font-family:Cinzel,serif;font-weight:700;font-size:clamp(16px,4.6vw,20px);color:#f4eeda;letter-spacing:.04em}
+  .card .iqline small{display:block;margin-top:4px;font-family:inherit;font-weight:400;font-size:.8em;opacity:.75}
   .card{max-width:520px;width:90%;display:flex;flex-direction:column;align-items:center;gap:16px}
   .card h2{font-family:Cinzel,serif;margin:0;font-size:clamp(28px,8vw,44px);color:var(--gold)}
   .card .v{font-size:clamp(18px,5vw,24px);line-height:1.5;font-style:italic}
@@ -65,11 +67,13 @@
   <div class="kb" id="kb"></div>
   <div class="overlay" id="overlay"><div class="card">
     <h2 id="ovTitle">Solved!</h2>
+    <div class="iqline" id="ovIq"></div>
     <div class="v" id="ovVerse"></div>
     <cite id="ovCite"></cite>
     <button class="btn" id="ovBtn">Next puzzle →</button>
   </div></div>
   <div class="toast" id="toast"></div>
+  <canvas id="confetti" style="position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:30"></canvas>
 <script>
 // Daily mode: ?daily=YYYY-MM-DD gives everyone the same puzzle that day (200 puzzles, then it cycles).
 const DAILY=(function(){try{const d=new URLSearchParams(location.search).get('daily');return /^\d{4}-\d{2}-\d{2}$/.test(d||'')?d:null;}catch(e){return null;}})();
@@ -91,7 +95,7 @@ function pickNext(prevIdx){
 }
 const gridEl=document.getElementById('grid');
 function isCell(r,c){return r>=0&&r<N&&c>=0&&c<N&&P.cells[r][c]}
-function buildPuzzle(){ badSet=new Set();
+function buildPuzzle(){ badSet=new Set(); reveals=0;
   P=PUZZLES[pi]; user=P.cells.map(row=>row.map(c=>c?'':null));
   document.getElementById('ptitle').innerHTML=P.title+'<small>Bible Crossword</small>';
   gridEl.innerHTML='';
@@ -143,10 +147,24 @@ function type(ch){ if(!isCell(sel.r,sel.c))return; user[sel.r][sel.c]=ch;
 function advance(back){ const w=wordOf(sel.r,sel.c,dir); if(!w)return; const idx=w.cells.findIndex(x=>x.r===sel.r&&x.c===sel.c); const ni=idx+(back?-1:1); if(ni>=0&&ni<w.cells.length) sel=w.cells[ni]; }
 function backspace(){ if(user[sel.r][sel.c]){ user[sel.r][sel.c]=''; render(); return;} advance(true); user[sel.r][sel.c]=''; render(); }
 function checkWin(){ for(let r=0;r<N;r++)for(let c=0;c<N;c++){const cell=P.cells[r][c]; if(cell&&user[r][c]!==cell.s)return;} win(); }
-function win(){ let played=load(SK,[]); const isDaily=DAILY_PI===pi; if(played.indexOf(pi)<0||isDaily){if(played.indexOf(pi)<0){played.push(pi); save(SK,played);} try{ window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(isDaily?{type:'iq',game:'crossword',daily:DAILY}:{type:'iq',game:'crossword'})); }catch(e){} } document.getElementById('ovVerse').textContent=P.verse; document.getElementById('ovCite').textContent=P.cite;
+// Scripture IQ for a solved puzzle: 5 if perfect, one less for each Reveal used (never below 0).
+const IQ_PERFECT=5;
+function win(){ let played=load(SK,[]); const isDaily=DAILY_PI===pi; const first=played.indexOf(pi)<0; const iq=Math.max(0,IQ_PERFECT-reveals);
+  if(first||isDaily){ if(first){played.push(pi); save(SK,played);} try{ window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(Object.assign({type:'iq',game:'crossword',iq:iq,reveals:reveals}, isDaily?{daily:DAILY}:{}))); }catch(e){} }
+  document.getElementById('ovTitle').textContent = reveals===0 ? 'Perfect!' : 'Solved!';
+  document.getElementById('ovIq').innerHTML = (first||isDaily) ? ('+'+iq+' Scripture IQ'+(reveals? '<small>'+reveals+' reveal'+(reveals>1?'s':'')+' used</small>' : '<small>No reveals used</small>')) : '';
+  confetti(); document.getElementById('ovVerse').textContent=P.verse; document.getElementById('ovCite').textContent=P.cite;
   document.getElementById('ovBtn').textContent='Next puzzle →'; document.getElementById('overlay').classList.add('show'); }
 // Wrong letters get a red box that stays until that square is changed or revealed.
 let badSet=new Set();
+let reveals=0; // Reveal taps that fixed a letter on this puzzle (Restart keeps the count, so it can't wipe reveals)
+// Gold confetti burst on every solve (visual only, no sound).
+function confetti(){ const cv=document.getElementById('confetti'); if(!cv) return; const dpr=window.devicePixelRatio||1; cv.width=innerWidth*dpr; cv.height=innerHeight*dpr;
+  const ctx=cv.getContext('2d'); ctx.scale(dpr,dpr); const cols=['#e6c45c','#cda434','#f4eeda','#a88a2e','#ffffff'];
+  const ps=Array.from({length:140},()=>({x:innerWidth/2+(Math.random()-.5)*80,y:-10,vx:(Math.random()-.5)*9,vy:Math.random()*-6-2,s:4+Math.random()*6,r:Math.random()*6.28,vr:(Math.random()-.5)*.3,c:cols[(Math.random()*cols.length)|0]}));
+  const t0=performance.now(); (function step(t){ const el=t-t0; ctx.clearRect(0,0,innerWidth,innerHeight); ctx.globalAlpha=el>2200?Math.max(0,1-(el-2200)/800):1;
+    for(const p of ps){ p.vy+=.18; p.vx*=.99; p.x+=p.vx; p.y+=p.vy; p.r+=p.vr; ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.r); ctx.fillStyle=p.c; ctx.fillRect(-p.s/2,-p.s/4,p.s,p.s/2); ctx.restore(); }
+    if(el<3000) requestAnimationFrame(step); else ctx.clearRect(0,0,innerWidth,innerHeight); })(t0); }
 function doCheck(){ badSet=new Set(); for(let r=0;r<N;r++)for(let c=0;c<N;c++){const cell=P.cells[r][c]; if(cell&&user[r][c]&&user[r][c]!==cell.s) badSet.add(r+','+c);}
   render(); const bad=badSet.size; toast(bad?bad+' letter'+(bad>1?'s':'')+' wrong':'Looking good!'); }
 // Reveal fixes a letter that actually needs it: the selected square if it's wrong or empty,
@@ -158,7 +176,7 @@ function revealLetter(){
   else if(w){ const i=w.cells.findIndex(x=>x.r===sel.r&&x.c===sel.c); const order=w.cells.slice(i).concat(w.cells.slice(0,i)); t=order.find(x=>needsFix(x.r,x.c))||null; }
   if(!t){ outer: for(let r=0;r<N;r++)for(let c=0;c<N;c++){ if(needsFix(r,c)){ t={r,c}; break outer; } } }
   if(!t){ toast('Every letter is already right'); return; }
-  user[t.r][t.c]=P.cells[t.r][t.c].s; badSet.delete(t.r+','+t.c); sel=t; ensureDir(); render(); checkWin();
+  user[t.r][t.c]=P.cells[t.r][t.c].s; badSet.delete(t.r+','+t.c); reveals++; sel=t; ensureDir(); render(); checkWin();
 }
 let toastT; function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),1300); }
 const rows=['QWERTYUIOP','ASDFGHJKL','ZXCVBNM']; const kb=document.getElementById('kb');
