@@ -116,8 +116,14 @@ function shuffleArr(a) {
 export function normalizeQuiz(raw) {
   const out = [];
   for (const item of Array.isArray(raw) ? raw : []) {
-    const q = String(item?.q || "").trim();
-    const opts = (Array.isArray(item?.options) ? item.options : []).map((o) => String(o || "").trim()).filter(Boolean);
+    const q = String(item?.q || item?.question || "").trim();
+    let opts = (Array.isArray(item?.options) ? item.options : Array.isArray(item?.choices) ? item.choices : [])
+      .map((o) => String((o && typeof o === "object" ? o.text || o.option : o) || "").trim()).filter(Boolean);
+    // If the model named the right answer instead of putting it first, move it to the front.
+    const named = typeof item?.answer === "string" ? item.answer.trim() : typeof item?.correct === "string" ? item.correct.trim() : "";
+    if (named) { const k = opts.findIndex((o) => o.toLowerCase() === named.toLowerCase()); if (k > 0) opts = [opts[k], ...opts.filter((_, i) => i !== k)]; }
+    else if (Number.isInteger(item?.answer) && item.answer > 0 && item.answer < opts.length) opts = [opts[item.answer], ...opts.filter((_, i) => i !== item.answer)];
+    opts = opts.slice(0, 4);
     if (!q || opts.length !== 4 || new Set(opts.map((o) => o.toLowerCase())).size !== 4) continue;
     const correct = opts[0];
     const options = shuffleArr(opts);
@@ -128,16 +134,25 @@ export function normalizeQuiz(raw) {
 }
 
 export async function sermonQuiz(text) {
-  if (!text || text.length < 500) return [];
-  const r = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: QUIZ_PROMPT },
-      { role: "user", content: text.slice(0, 48000) },
-    ],
-  });
-  return normalizeQuiz(JSON.parse(r.choices[0].message.content).quiz);
+  if (!text || text.length < 500) { console.error("sermon quiz: transcript too short", text ? text.length : 0); return []; }
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: QUIZ_PROMPT },
+        { role: "user", content: text.slice(0, 48000) },
+      ],
+    });
+    const content = r.choices[0].message.content || "";
+    let parsed = {};
+    try { parsed = JSON.parse(content); } catch { /* logged below */ }
+    const list = Array.isArray(parsed) ? parsed : parsed.quiz || parsed.questions || Object.values(parsed).find(Array.isArray) || [];
+    const quiz = normalizeQuiz(list);
+    if (quiz.length) return quiz;
+    console.error(`sermon quiz: no usable questions (attempt ${attempt})`, content.slice(0, 600));
+  }
+  return [];
 }
 
 // Study plan + weekly quiz from one transcript. The quiz never blocks the plan: a quiz failure
