@@ -284,7 +284,7 @@ export function mountSermonPages(app) {
       title: "Bible Study Genius — free Bible app for iPhone & Android",
       description: "Read and listen in 12 translations, study the original Greek and Hebrew, follow your church's sermon, and play Bible games. Free, no ads.",
       canonical: `${PUBLIC_BASE}/get`,
-      image: coverUrl("Bible Study Genius"),
+      image: `${PUBLIC_BASE}/cover.png?title=${encodeURIComponent("Bible Study Genius")}&sub=${encodeURIComponent("Free Bible App")}&w=1200`,
       body: `${appCta("Get Bible Study Genius — free")}
 <script>if(/Macintosh/.test(navigator.userAgent)&&navigator.maxTouchPoints>1){location.replace(${JSON.stringify(APP_STORE_URL)});}</script>`,
     }), 300);
