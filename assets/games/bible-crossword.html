@@ -21,7 +21,8 @@
   .cell.block{background:transparent;pointer-events:none}
   .cell.hl{background:#f6e6a8}
   .cell.sel{background:var(--gold);box-shadow:0 0 0 2px #fff6 inset}
-  .cell.bad{color:#c0392b}
+  .cell.bad{color:#b3261e;background:#fde4e1;box-shadow:inset 0 0 0 3px #d93a2f}
+  .cell.sel.bad{background:#f6c9c3}
   .cell .n{position:absolute;top:1px;left:3px;font-size:clamp(7px,2vw,10px);font-weight:700;color:#7a6a3a;line-height:1}
   .clues{width:100%;max-width:560px;flex:1;min-height:0;display:flex;gap:8px}
   .cluecol{flex:1;background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:6px 4px 6px 8px;display:flex;flex-direction:column;min-height:0}
@@ -90,7 +91,7 @@ function pickNext(prevIdx){
 }
 const gridEl=document.getElementById('grid');
 function isCell(r,c){return r>=0&&r<N&&c>=0&&c<N&&P.cells[r][c]}
-function buildPuzzle(){
+function buildPuzzle(){ badSet=new Set();
   P=PUZZLES[pi]; user=P.cells.map(row=>row.map(c=>c?'':null));
   document.getElementById('ptitle').innerHTML=P.title+'<small>Bible Crossword</small>';
   gridEl.innerHTML='';
@@ -126,7 +127,7 @@ function render(){
   ensureDir(); const w=wordOf(sel.r,sel.c,dir); const inWord=new Set((w?w.cells:[]).map(x=>x.r+','+x.c));
   for(let r=0;r<N;r++)for(let c=0;c<N;c++){ const cell=P.cells[r][c]; if(!cell)continue; const el=cellEl(r,c);
     el.classList.toggle('hl',inWord.has(r+','+c)); el.classList.toggle('sel',r===sel.r&&c===sel.c);
-    el.classList.remove('bad'); el.querySelector('.t').textContent=user[r][c]||''; }
+    el.classList.toggle('bad', badSet.has(r+','+c) && !!user[r][c] && user[r][c]!==cell.s); el.querySelector('.t').textContent=user[r][c]||''; }
   const anum=clueNumAt(sel.r,sel.c,dir);
   document.querySelectorAll('.clue').forEach(row=>{ const n=+row.dataset.num,rd=row.dataset.dir;
     row.classList.toggle('active', n===anum&&rd===dir);
@@ -144,9 +145,21 @@ function backspace(){ if(user[sel.r][sel.c]){ user[sel.r][sel.c]=''; render(); r
 function checkWin(){ for(let r=0;r<N;r++)for(let c=0;c<N;c++){const cell=P.cells[r][c]; if(cell&&user[r][c]!==cell.s)return;} win(); }
 function win(){ let played=load(SK,[]); const isDaily=DAILY_PI===pi; if(played.indexOf(pi)<0||isDaily){if(played.indexOf(pi)<0){played.push(pi); save(SK,played);} try{ window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(isDaily?{type:'iq',game:'crossword',daily:DAILY}:{type:'iq',game:'crossword'})); }catch(e){} } document.getElementById('ovVerse').textContent=P.verse; document.getElementById('ovCite').textContent=P.cite;
   document.getElementById('ovBtn').textContent='Next puzzle →'; document.getElementById('overlay').classList.add('show'); }
-function doCheck(){ let bad=0; for(let r=0;r<N;r++)for(let c=0;c<N;c++){const cell=P.cells[r][c]; if(cell&&user[r][c]&&user[r][c]!==cell.s){cellEl(r,c).classList.add('bad');bad++;}}
-  toast(bad?bad+' letter'+(bad>1?'s':'')+' off':'Looking good!'); if(bad)setTimeout(()=>document.querySelectorAll('.cell.bad').forEach(e=>e.classList.remove('bad')),1400); }
-function revealLetter(){ const cell=P.cells[sel.r][sel.c]; if(cell){ user[sel.r][sel.c]=cell.s; advance(false); render(); checkWin(); } }
+// Wrong letters get a red box that stays until that square is changed or revealed.
+let badSet=new Set();
+function doCheck(){ badSet=new Set(); for(let r=0;r<N;r++)for(let c=0;c<N;c++){const cell=P.cells[r][c]; if(cell&&user[r][c]&&user[r][c]!==cell.s) badSet.add(r+','+c);}
+  render(); const bad=badSet.size; toast(bad?bad+' letter'+(bad>1?'s':'')+' wrong':'Looking good!'); }
+// Reveal fixes a letter that actually needs it: the selected square if it's wrong or empty,
+// otherwise the next wrong/empty square in this word, otherwise the next one anywhere.
+function needsFix(r,c){ const cell=P.cells[r][c]; return !!cell && user[r][c]!==cell.s; }
+function revealLetter(){
+  let t=null; const w=wordOf(sel.r,sel.c,dir);
+  if(needsFix(sel.r,sel.c)) t={r:sel.r,c:sel.c};
+  else if(w){ const i=w.cells.findIndex(x=>x.r===sel.r&&x.c===sel.c); const order=w.cells.slice(i).concat(w.cells.slice(0,i)); t=order.find(x=>needsFix(x.r,x.c))||null; }
+  if(!t){ outer: for(let r=0;r<N;r++)for(let c=0;c<N;c++){ if(needsFix(r,c)){ t={r,c}; break outer; } } }
+  if(!t){ toast('Every letter is already right'); return; }
+  user[t.r][t.c]=P.cells[t.r][t.c].s; badSet.delete(t.r+','+t.c); sel=t; ensureDir(); render(); checkWin();
+}
 let toastT; function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),1300); }
 const rows=['QWERTYUIOP','ASDFGHJKL','ZXCVBNM']; const kb=document.getElementById('kb');
 rows.forEach((row,ri)=>{ const rd=document.createElement('div'); rd.className='kbrow';
@@ -157,7 +170,7 @@ rows.forEach((row,ri)=>{ const rd=document.createElement('div'); rd.className='k
 document.addEventListener('keydown',e=>{ if(/^[a-zA-Z]$/.test(e.key))type(e.key.toUpperCase()); else if(e.key==='Backspace')backspace(); });
 document.getElementById('checkBtn').onclick=doCheck;
 document.getElementById('revealBtn').onclick=revealLetter;
-document.getElementById('restartBtn').onclick=()=>{ user=P.cells.map(row=>row.map(c=>c?'':null)); render(); };
+document.getElementById('restartBtn').onclick=()=>{ user=P.cells.map(row=>row.map(c=>c?'':null)); badSet=new Set(); render(); };
 document.getElementById('ovBtn').onclick=()=>{ document.getElementById('overlay').classList.remove('show'); pi=pickNext(pi); save(CK,pi); buildPuzzle(); };
 const DAILY_PI=DAILY?((Math.floor(Date.UTC(+DAILY.slice(0,4),+DAILY.slice(5,7)-1,+DAILY.slice(8,10))/86400000)%PUZZLES.length)+PUZZLES.length)%PUZZLES.length:-1;
 if(DAILY_PI>=0){pi=DAILY_PI;}else{pi=load(CK,-1); if(!(pi>=0&&pi<PUZZLES.length)){pi=pickNext(-1); save(CK,pi);}} buildPuzzle();
