@@ -33,5 +33,27 @@ export async function initDb() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS highlights_user_idx ON highlights(user_id);`);
+  // Notes & Journal: verse notes, journal entries, sermon prep. Soft-deleted (deleted=true)
+  // so a stale device can't bring a deleted note back on its next sync.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notes (
+      user_id     TEXT NOT NULL,
+      id          TEXT NOT NULL,
+      kind        TEXT NOT NULL DEFAULT 'journal',
+      title       TEXT NOT NULL DEFAULT '',
+      body        TEXT NOT NULL DEFAULT '',
+      ref         TEXT,
+      book_id     TEXT,
+      chapter     INTEGER,
+      verse       INTEGER,
+      verse_end   INTEGER,
+      extra       JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at  BIGINT NOT NULL,
+      updated_at  BIGINT NOT NULL,
+      deleted     BOOLEAN NOT NULL DEFAULT false,
+      PRIMARY KEY (user_id, id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS notes_user_idx ON notes(user_id);`);
   console.log("✅ Database ready");
 }
