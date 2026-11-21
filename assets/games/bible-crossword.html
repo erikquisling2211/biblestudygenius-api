@@ -192,5 +192,7 @@ document.getElementById('restartBtn').onclick=()=>{ user=P.cells.map(row=>row.ma
 document.getElementById('ovBtn').onclick=()=>{ if(DAILY_PI===pi){ try{ window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({type:'close'})); }catch(e){} return; } document.getElementById('overlay').classList.remove('show'); pi=pickNext(pi); save(CK,pi); buildPuzzle(); };
 const DAILY_PI=DAILY?((Math.floor(Date.UTC(+DAILY.slice(0,4),+DAILY.slice(5,7)-1,+DAILY.slice(8,10))/86400000)%PUZZLES.length)+PUZZLES.length)%PUZZLES.length:-1;
 if(DAILY_PI>=0){pi=DAILY_PI;}else{pi=load(CK,-1); if(!(pi>=0&&pi<PUZZLES.length)){pi=pickNext(-1); save(CK,pi);}} buildPuzzle();
+// Reopening a daily puzzle that's already done (?solved=1): show it filled in, to look over.
+if(DAILY_PI>=0 && /[?&]solved=1(&|$)/.test(location.search)){ user=P.cells.map(row=>row.map(c=>c?c.s:null)); render(); setTimeout(()=>toast("Today's puzzle — solved ✓"),300); }
 </script>
 </body></html>
