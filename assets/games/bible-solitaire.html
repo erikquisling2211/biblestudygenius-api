@@ -65,6 +65,13 @@ h1 small{display:block;font-family:Inter,sans-serif;font-weight:600;font-size:9p
 .win .verse{font-size:clamp(21px,6.2vw,28px);line-height:1.34;color:var(--ink);font-weight:600;margin:0 0 10px}
 .win cite{display:block;font-style:normal;color:#bfe6c9;font-size:clamp(14px,4vw,17px);margin-bottom:24px}
 .win .btn{font-size:16px;padding:13px 26px}
+#confirm{position:fixed;inset:0;background:rgba(8,20,12,.75);display:none;align-items:center;justify-content:center;padding:26px;z-index:60}
+#confirm.show{display:flex}
+#confirm .box{background:#1d3a26;border:1px solid rgba(255,255,255,.18);border-radius:16px;padding:22px 22px 18px;max-width:320px;text-align:center}
+#confirm h3{font-family:Cinzel,serif;color:var(--gold);font-size:21px;margin:0 0 8px}
+#confirm p{color:var(--ink);font-size:15px;margin:0 0 18px}
+#confirm .row{display:flex;gap:10px;justify-content:center}
+#confirm .btn{font-size:15px;padding:11px 20px}
 </style>
 </head>
 <body>
@@ -93,6 +100,11 @@ h1 small{display:block;font-family:Inter,sans-serif;font-weight:600;font-size:9p
   <p class="verse" id="ovVerse"></p>
   <cite id="ovCite"></cite>
   <button class="btn" id="ovBtn">Play Again</button>
+</div></div>
+<div id="confirm"><div class="box">
+  <h3>Are you sure?</h3>
+  <p>Resigning ends this game.</p>
+  <div class="row"><button class="btn ghost" id="cfNo">Keep Playing</button><button class="btn" id="cfYes">Resign</button></div>
 </div></div>
 <script>
 const SUIT=['♥','♦','♣','♠']; // H D C S
@@ -301,7 +313,11 @@ function finishPointer(e){ if(!down)return; const el=down.el;
 document.addEventListener('pointerup',finishPointer);
 document.addEventListener('pointercancel',e=>{ if(ghost){ghost.remove();ghost=null;} dimmed.forEach(n=>n.classList.remove('drag-src')); down=null; drag=false; dimmed=[]; });
 // No New button: a new game starts from the end screen (after Resign or a win), which shows the verse first.
-document.getElementById('resignBtn').onclick=()=>{ if(ended)return; auto=false; ended=true; showEnd(false); };
+// Resign asks first, so a stray tap doesn't end the game.
+const confirmEl=document.getElementById('confirm');
+document.getElementById('resignBtn').onclick=()=>{ if(ended)return; confirmEl.classList.add('show'); };
+document.getElementById('cfNo').onclick=()=>confirmEl.classList.remove('show');
+document.getElementById('cfYes').onclick=()=>{ confirmEl.classList.remove('show'); if(ended)return; auto=false; ended=true; showEnd(false); };
 document.getElementById('undoBtn').onclick=undo;
 document.getElementById('ovBtn').onclick=()=>{ document.getElementById('overlay').classList.remove('show'); fresh(); };
 if(!restore()) fresh();
