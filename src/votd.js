@@ -5,7 +5,11 @@
  * (made by the app, not tied to any person). One Amen per device per day (tap
  * again to take it back); a share counts once per device per day.
  *
- *   GET  /api/votd/stats?day=YYYY-MM-DD&ref=book.c.v&device=…  → { amen, shares, mine: { amen } }
+ *   GET  /api/votd/stats?day=YYYY-MM-DD&ref=book.c.v&device=…  → { amen, shares, mine: { amen }, show }
+ *
+ * `show` tells the app whether to display the numbers. It's off until the
+ * Railway variable VOTD_SHOW_COUNTS=1 is set (planned once the app has ~1,000
+ * users); reactions are recorded either way.
  *   POST /api/votd/amen   { day, ref, device, on }               → same shape
  *   POST /api/votd/share  { day, ref, device }                   → same shape
  */
@@ -28,7 +32,7 @@ async function stats(day, ref, device) {
        FROM votd_reactions WHERE day = $1 AND ref = $2 GROUP BY kind`,
     [day, ref, device || ""]);
   const by = Object.fromEntries(r.rows.map((x) => [x.kind, x]));
-  return { amen: by.amen?.n ?? 0, shares: by.share?.n ?? 0, mine: { amen: !!by.amen?.mine } };
+  return { amen: by.amen?.n ?? 0, shares: by.share?.n ?? 0, mine: { amen: !!by.amen?.mine }, show: process.env.VOTD_SHOW_COUNTS === "1" };
 }
 
 function parse(src) {
