@@ -111,6 +111,14 @@ const VERSES=[
  ["“Weeping may stay for the night, but rejoicing comes in the morning.”","Psalm 30:5"]
 ];
 let S, sel=null, hist=[], ended=false, auto=false, autoGaveUp=false;
+// Saved game: kept on the phone so leaving mid-game and coming back resumes it.
+const SAVE_KEY='bsg.solitaire.v1';
+function save(){ try{ if(ended){ localStorage.removeItem(SAVE_KEY); return; }
+  localStorage.setItem(SAVE_KEY, JSON.stringify({S, hist:hist.slice(-30), autoGaveUp})); }catch(_){ } }
+function restore(){ try{ const d=JSON.parse(localStorage.getItem(SAVE_KEY)||'null');
+  if(!d||!d.S||!Array.isArray(d.S.tab)||d.S.tab.length!==7)return false;
+  S=d.S; hist=Array.isArray(d.hist)?d.hist:[]; autoGaveUp=!!d.autoGaveUp; sel=null; ended=false; auto=false;
+  render(); checkEnd(); return true; }catch(_){ return false; } }
 function fresh(){
   let deck=[]; for(let s=0;s<4;s++)for(let r=1;r<=13;r++)deck.push({r,s,up:false});
   for(let i=deck.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[deck[i],deck[j]]=[deck[j],deck[i]];}
@@ -132,6 +140,7 @@ function slotEl(sym){ const d=document.createElement('div'); d.className='slot';
 function clear(el){ while(el.firstChild)el.removeChild(el.firstChild); }
 function isSel(pile,idx,ci){ return sel&&sel.pile===pile&&sel.idx===idx&&sel.ci===ci; }
 function render(){
+  save();
   const CW=document.getElementById('stock').clientWidth||46;
   document.documentElement.style.setProperty('--cw',CW+'px');
   // foundations (top-left)
@@ -239,7 +248,7 @@ function autoStep(n){
   if(!did){ auto=false; autoGaveUp=true; render(); return; }
   render(); setTimeout(()=>autoStep(n+1), 85);
 }
-function showEnd(won){ const v=VERSES[Math.floor(Math.random()*VERSES.length)];
+function showEnd(won){ try{localStorage.removeItem(SAVE_KEY);}catch(_){ } const v=VERSES[Math.floor(Math.random()*VERSES.length)];
   document.getElementById('ovCrown').textContent=won?'👑':'🕊️';
   document.getElementById('ovTitle').textContent=won?'Great Job!':'Good Game';
   document.getElementById('ovVerse').textContent=v[0]; document.getElementById('ovCite').textContent=v[1];
@@ -295,7 +304,7 @@ document.addEventListener('pointercancel',e=>{ if(ghost){ghost.remove();ghost=nu
 document.getElementById('resignBtn').onclick=()=>{ if(ended)return; auto=false; ended=true; showEnd(false); };
 document.getElementById('undoBtn').onclick=undo;
 document.getElementById('ovBtn').onclick=()=>{ document.getElementById('overlay').classList.remove('show'); fresh(); };
-fresh();
+if(!restore()) fresh();
 </script>
 </body>
 </html>
