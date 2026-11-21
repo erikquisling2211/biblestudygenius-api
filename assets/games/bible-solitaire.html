@@ -73,7 +73,7 @@ h1 small{display:block;font-family:Inter,sans-serif;font-weight:600;font-size:9p
   <div class="tools">
     <button class="btn ghost" id="undoBtn">Undo</button>
     <button class="btn ghost" id="resignBtn">Resign</button>
-    <button class="btn" id="newBtn">New</button>
+    
   </div>
 </header>
 <div class="top">
@@ -291,7 +291,7 @@ function finishPointer(e){ if(!down)return; const el=down.el;
 }
 document.addEventListener('pointerup',finishPointer);
 document.addEventListener('pointercancel',e=>{ if(ghost){ghost.remove();ghost=null;} dimmed.forEach(n=>n.classList.remove('drag-src')); down=null; drag=false; dimmed=[]; });
-document.getElementById('newBtn').onclick=()=>{ auto=false; document.getElementById('overlay').classList.remove('show'); fresh(); };
+// No New button: a new game starts from the end screen (after Resign or a win), which shows the verse first.
 document.getElementById('resignBtn').onclick=()=>{ if(ended)return; auto=false; ended=true; showEnd(false); };
 document.getElementById('undoBtn').onclick=undo;
 document.getElementById('ovBtn').onclick=()=>{ document.getElementById('overlay').classList.remove('show'); fresh(); };
