@@ -11,7 +11,8 @@
  *                                Google Play via install referrer "church_<id>"; App Store via a
  *                                "bsg-church:<id>" clipboard hand-off the app offers on first launch.
  *
- * The link is stored on churches.smart_link at provisioning.
+ * The link is stored on churches.smart_link at provisioning, and a QR code of it
+ * (GET /church/:id/qr.png, churches.js) on churches.qr_image_url.
  *
  * Admin:
  *   POST /admin/smart-links/backfill   store links for every church missing one
@@ -19,22 +20,33 @@
  */
 import { pool } from "./db.js";
 
-const SERMONS_SITE = (process.env.SERMONS_SITE_URL || "https://sermons.biblestudygenius.com").replace(/\/$/, "");
+export const SERMONS_SITE = (process.env.SERMONS_SITE_URL || "https://sermons.biblestudygenius.com").replace(/\/$/, "");
 
 let migrated = null;
 function migrate() {
-  if (!migrated) migrated = pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS smart_link TEXT;`).catch((e) => { migrated = null; throw e; });
+  if (!migrated) {
+    migrated = pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS smart_link TEXT;`)
+      .then(() => pool.query(`ALTER TABLE churches ADD COLUMN IF NOT EXISTS qr_image_url TEXT;`))
+      .catch((e) => { migrated = null; throw e; });
+  }
   return migrated;
 }
+export const migrateSmartLinks = migrate;
 
 export const smartLinkUrl = (churchId) => `${SERMONS_SITE}/c/${churchId}`;
+export const qrImageUrl = (churchId) => `${SERMONS_SITE}/church/${churchId}/qr.png`;
 
-/** Return the church's smart link, storing it on the record if missing. Never throws. */
+/** Return the church's smart link, storing it (and its QR image URL) on the record if missing. Never throws. */
 export async function ensureSmartLink(churchId) {
   const url = smartLinkUrl(churchId);
+  const qr = qrImageUrl(churchId);
   try {
     await migrate();
-    await pool.query(`UPDATE churches SET smart_link = $1 WHERE id = $2 AND smart_link IS DISTINCT FROM $1`, [url, churchId]);
+    await pool.query(
+      `UPDATE churches SET smart_link = $1, qr_image_url = $3
+        WHERE id = $2 AND (smart_link IS DISTINCT FROM $1 OR qr_image_url IS DISTINCT FROM $3)`,
+      [url, churchId, qr]
+    );
   } catch (e) {
     console.error(`ensureSmartLink(${churchId})`, (e && e.message) || e);
   }
@@ -56,7 +68,9 @@ export function mountSmartLinks(app, { admin }) {
     try {
       await migrate();
       const r = await pool.query(
-        `UPDATE churches SET smart_link = $1 || '/c/' || id WHERE smart_link IS NULL OR smart_link <> $1 || '/c/' || id RETURNING id`,
+        `UPDATE churches SET smart_link = $1 || '/c/' || id, qr_image_url = $1 || '/church/' || id || '/qr.png'
+          WHERE smart_link IS DISTINCT FROM $1 || '/c/' || id OR qr_image_url IS DISTINCT FROM $1 || '/church/' || id || '/qr.png'
+          RETURNING id`,
         [SERMONS_SITE]
       );
       res.json({ updated: r.rowCount });
