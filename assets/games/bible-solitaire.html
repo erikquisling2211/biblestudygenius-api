@@ -205,6 +205,7 @@ function removeSel(){ if(sel.pile==='waste')return [S.waste.pop()]; if(sel.pile=
   const p=S.tab[sel.idx]; const out=p.splice(sel.ci); if(p.length&&!p[p.length-1].up)p[p.length-1].up=true; return out; }
 function sendToFound(pile,idx,ci,card){ snap(); sel={pile,idx,ci}; removeSel(); S.found[card.s].push(card); sel=null; render(); checkEnd(); }
 function tapCard(pile,idx,ci){
+  if(auto||ended)return;
   if(sel){ if(isSel(pile,idx,ci)){ forceFound(); return; } tapDest(pile,idx); return; }
   // no selection -> single tap
   let card, isTop=false;
@@ -218,14 +219,14 @@ function tapCard(pile,idx,ci){
 function forceFound(){ const cards=moving(); if(cards.length!==1){ sel=null; render(); return; }
   const card=cards[0]; const f=foundFor(card); if(f>=0){ removeSelToFound(card,f); return; } sel=null; render(); }
 function removeSelToFound(card,f){ snap(); removeSel(); S.found[f].push(card); sel=null; render(); checkEnd(); }
-function tapDest(pile,idx){
+function tapDest(pile,idx){ if(auto||ended){ sel=null; render(); return; }
   if(!sel)return; const cards=moving(); const lead=cards[0];
   if(pile==='found'){ if(cards.length===1 && canToFound(lead,idx)){ snap(); removeSel(); S.found[idx].push(lead); sel=null; render(); checkEnd(); return; } sel=null; render(); return; }
   if(sel.pile==='tab' && sel.idx===idx){ sel=null; render(); return; }
   if(canToTab(lead,idx)){ snap(); const moved=removeSel(); S.tab[idx].push(...moved); sel=null; render(); checkEnd(); return; }
   flash('Can’t place there'); sel=null; render();
 }
-function draw(){ sel=null;
+function draw(){ if(auto||ended)return; sel=null;
   if(S.stock.length){ snap(); const n=Math.min(3,S.stock.length); for(let i=0;i<n;i++){ const c=S.stock.pop(); c.up=true; S.waste.push(c); } render(); checkEnd(); return; }
   if(S.waste.length){ snap(); while(S.waste.length){ const c=S.waste.pop(); c.up=false; S.stock.push(c); } render(); return; }
 }
@@ -242,25 +243,48 @@ function isStuck(){
   return true;
 }
 function noFaceDown(){ return S.tab.every(p=>p.every(c=>c.up)); }
-function checkEnd(){ if(ended||auto)return;
-  if(hasWon()){ ended=true; showEnd(true); return; }
+function checkEnd(){ if(ended)return;
+  // A win always counts, even if it happens while the auto-finish is running.
+  if(hasWon()){ auto=false; ended=true; render(); showEnd(true); return; }
+  if(auto)return;
   if(!autoGaveUp && noFaceDown() && (S.stock.length||S.waste.length||S.tab.some(p=>p.length))){ startAuto(); return; }
   if(isStuck()){ ended=true; showEnd(false); }
 }
-function startAuto(){ if(auto)return; auto=true; snap(); autoStep(0); }
+function startAuto(){ if(auto)return; auto=true; sel=null; snap(); autoStep(0); }
+// Auto-finish (every tableau card is face up): send the next card each home pile
+// needs, from wherever it is. The lowest needed card is never covered (anything on
+// top of it is lower and already home), so this always wins in at most 52 moves,
+// with no flipping through the draw pile.
+function takeCard(card){
+  for(let c=0;c<7;c++){ const p=S.tab[c]; if(p.length&&p[p.length-1]===card){ p.pop(); return true; } }
+  for(const pile of [S.waste,S.stock]){ const k=pile.indexOf(card); if(k>=0){ pile.splice(k,1); return true; } }
+  return false;
+}
 function autoStep(n){
   if(!auto)return;
   if(hasWon()){ auto=false; ended=true; render(); showEnd(true); return; }
-  if(n>600){ auto=false; autoGaveUp=true; render(); return; }
-  let did=false;
-  for(let c=0;c<7;c++){ const p=S.tab[c]; if(p.length){ const top=p[p.length-1]; const f=foundFor(top); if(f>=0){ p.pop(); S.found[f].push(top); did=true; break; } } }
-  if(!did && S.waste.length){ const top=S.waste[S.waste.length-1]; const f=foundFor(top); if(f>=0){ S.waste.pop(); S.found[f].push(top); did=true; } }
-  if(!did){ outer: for(let c=0;c<7;c++){ const p=S.tab[c]; if(p.length>=2){ const top=p[p.length-1], beneath=p[p.length-2]; if(foundFor(beneath)>=0){ for(let d=0;d<7;d++){ if(d!==c && canToTab(top,d)){ S.tab[d].push(S.tab[c].pop()); did=true; break outer; } } } } } }
-  if(!did && (S.stock.length||S.waste.length)){ if(S.stock.length){ const k=Math.min(3,S.stock.length); for(let i=0;i<k;i++){ const cc=S.stock.pop(); cc.up=true; S.waste.push(cc); } } else { while(S.waste.length){ const cc=S.waste.pop(); cc.up=false; S.stock.push(cc); } } did=true; }
-  if(!did){ auto=false; autoGaveUp=true; render(); return; }
-  render(); setTimeout(()=>autoStep(n+1), 85);
+  let best=null;
+  const consider=c=>{ if(foundFor(c)>=0&&(!best||c.r<best.r))best=c; };
+  S.tab.forEach(p=>{ if(p.length)consider(p[p.length-1]); });
+  S.waste.forEach(consider); S.stock.forEach(consider);
+  if(!best||n>60||!takeCard(best)){ auto=false; autoGaveUp=true; render(); return; }
+  best.up=true; S.found[best.s].push(best);
+  render(); setTimeout(()=>autoStep(n+1), 90);
 }
-function showEnd(won){ try{localStorage.removeItem(SAVE_KEY);}catch(_){ } const v=VERSES[Math.floor(Math.random()*VERSES.length)];
+function confetti(){
+  const cv=document.createElement('canvas'); cv.style.cssText='position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:55';
+  document.body.appendChild(cv); const dpr=window.devicePixelRatio||1; cv.width=innerWidth*dpr; cv.height=innerHeight*dpr;
+  const x=cv.getContext('2d'); x.scale(dpr,dpr);
+  const cols=['#f4c95d','#e8505b','#4fb3ff','#6fdc8c','#ffffff','#c58bff'];
+  const P=Array.from({length:160},()=>({x:Math.random()*innerWidth,y:-20-Math.random()*innerHeight*0.6,vx:(Math.random()-.5)*2.4,vy:2+Math.random()*3,
+    w:6+Math.random()*6,h:4+Math.random()*5,a:Math.random()*6.3,va:(Math.random()-.5)*.3,c:cols[Math.floor(Math.random()*cols.length)]}));
+  const t0=performance.now();
+  (function f(t){ x.clearRect(0,0,innerWidth,innerHeight); const age=t-t0;
+    P.forEach(p=>{ p.x+=p.vx; p.y+=p.vy; p.vy+=0.03; p.a+=p.va; x.save(); x.globalAlpha=age>3200?Math.max(0,1-(age-3200)/800):1;
+      x.translate(p.x,p.y); x.rotate(p.a); x.fillStyle=p.c; x.fillRect(-p.w/2,-p.h/2,p.w,p.h); x.restore(); });
+    if(age<4000)requestAnimationFrame(f); else cv.remove(); })(t0);
+}
+function showEnd(won){ if(won)confetti(); try{localStorage.removeItem(SAVE_KEY);}catch(_){ } const v=VERSES[Math.floor(Math.random()*VERSES.length)];
   document.getElementById('ovCrown').textContent=won?'👑':'🕊️';
   document.getElementById('ovTitle').textContent=won?'Great Job!':'Good Game';
   document.getElementById('ovVerse').textContent=v[0]; document.getElementById('ovCite').textContent=v[1];
