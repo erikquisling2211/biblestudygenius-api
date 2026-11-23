@@ -22,7 +22,6 @@ import Stripe from "stripe";
 import QRCode from "qrcode";
 import { ensureSmartLink, shareLinkFor, mountSmartLinks } from "./smartlinks.js";
 import { mountOutreach } from "./outreach.js";
-import { mountClaims } from "./claim.js";
 import { mountChurchExtras, upcomingEvents, extraStats, hasUpcomingManualEvents } from "./churchextras.js";
 
 const CHURCH_JWT_SECRET = process.env.CHURCH_JWT_SECRET || process.env.ADMIN_TOKEN || "bsg-church-dev-secret";
@@ -610,7 +609,6 @@ ${items}
 export function mountChurches(app) {
   mountSmartLinks(app, { admin });
   mountOutreach(app, { admin });
-  mountClaims(app, { admin });
   initChurches().catch((e) => console.error("initChurches", e));
   mountChurchExtras(app, { admin, churchAuth });
 

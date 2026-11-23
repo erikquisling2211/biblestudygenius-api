@@ -13,9 +13,7 @@
  * Endpoints (protected: header "x-api-key: <OUTREACH_API_KEY>"; CSV also accepts ?key=):
  *   GET  /churches/outreach        { count, churches: [{ church_id, church_name, pastor_name,
  *                                    pastor_email, latest_sermon_title, demo_link, qr_image_url,
- *                                    claim_link, claimed, city, state }] }
- *                                  claim_link: the church's "claim your church" page (claim.js), or
- *                                  the dashboard login once the church already has a login
+ *                                    city, state }] }
  *                                  ?with_email=1 → only churches that have a pastor email
  *   GET  /churches/outreach.csv    same rows as CSV
  *
@@ -28,7 +26,6 @@
 import crypto from "crypto";
 import { pool } from "./db.js";
 import { SERMONS_SITE, smartLinkUrl, qrImageUrl, migrateSmartLinks } from "./smartlinks.js";
-import { ensureClaimTokens, claimLinkFor, DASHBOARD_URL } from "./claim.js";
 
 let migrated = null;
 function migrate() {
@@ -59,11 +56,9 @@ export async function backfillOutreachLinks() {
 
 export async function outreachRows({ withEmail = false } = {}) {
   await backfillOutreachLinks();
-  await ensureClaimTokens();
   const r = await pool.query(
     `SELECT c.id, COALESCE(NULLIF(c.display_name, ''), c.name) AS church_name, c.city, c.state,
-            c.smart_link, c.qr_image_url, c.claim_token,
-            EXISTS (SELECT 1 FROM church_admins a WHERE a.church_id = c.id) AS claimed,
+            c.smart_link, c.qr_image_url,
             COALESCE(NULLIF(c.pastor_name, ''), ls.preacher) AS pastor_name,
             COALESCE(NULLIF(c.pastor_email, ''), NULLIF(c.contact_email, ''),
                      (SELECT a.email FROM church_admins a WHERE a.church_id = c.id ORDER BY a.created_at, a.id LIMIT 1)) AS pastor_email,
@@ -85,15 +80,13 @@ export async function outreachRows({ withEmail = false } = {}) {
       latest_sermon_title: c.latest_sermon_title || "",
       demo_link: c.smart_link || smartLinkUrl(c.id),
       qr_image_url: c.qr_image_url || qrImageUrl(c.id),
-      claim_link: c.claimed ? DASHBOARD_URL : claimLinkFor(c.claim_token),
-      claimed: !!c.claimed,
       city: c.city || "",
       state: c.state || "",
     }))
     .filter((c) => !withEmail || c.pastor_email);
 }
 
-const CSV_COLS = ["church_id", "church_name", "pastor_name", "pastor_email", "latest_sermon_title", "demo_link", "qr_image_url", "claim_link", "claimed", "city", "state"];
+const CSV_COLS = ["church_id", "church_name", "pastor_name", "pastor_email", "latest_sermon_title", "demo_link", "qr_image_url", "city", "state"];
 const csvCell = (v) => {
   let s = String(v ?? "");
   if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // keep spreadsheets from treating a value as a formula
