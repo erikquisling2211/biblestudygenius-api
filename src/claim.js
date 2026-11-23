@@ -105,7 +105,8 @@ async function churchByToken(token) {
 async function sendClaimAlert({ church, name, email }) {
   if (!process.env.RESEND_API_KEY) return false;
   const from = process.env.RESEND_FROM || "Bible Study Genius <hello@biblestudygenius.com>";
-  const to = process.env.ADMIN_ALERT_EMAIL || "erikquisling@yahoo.com"; // same default as church-request alerts
+  const to = process.env.ADMIN_ALERT_EMAIL;
+  if (!to) return false;
   try {
     const r = await fetch("https://api.resend.com/emails", {
       method: "POST",
