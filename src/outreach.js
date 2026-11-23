@@ -13,7 +13,8 @@
  * Endpoints (protected: header "x-api-key: <OUTREACH_API_KEY>"; CSV also accepts ?key=):
  *   GET  /churches/outreach        { count, churches: [{ church_id, church_name, pastor_name,
  *                                    pastor_email, latest_sermon_title, demo_link, qr_image_url,
- *                                    city, state }] }
+ *                                    signup_link, signed_up, city, state }] }
+ *                                  signup_link: one tap to Stripe checkout for that church (startlink.js)
  *                                  ?with_email=1 → only churches that have a pastor email
  *   GET  /churches/outreach.csv    same rows as CSV
  *
@@ -26,6 +27,7 @@
 import crypto from "crypto";
 import { pool } from "./db.js";
 import { SERMONS_SITE, smartLinkUrl, qrImageUrl, migrateSmartLinks } from "./smartlinks.js";
+import { ensureSignupTokens, signupLinkFor } from "./startlink.js";
 
 let migrated = null;
 function migrate() {
@@ -56,9 +58,10 @@ export async function backfillOutreachLinks() {
 
 export async function outreachRows({ withEmail = false } = {}) {
   await backfillOutreachLinks();
+  await ensureSignupTokens();
   const r = await pool.query(
     `SELECT c.id, COALESCE(NULLIF(c.display_name, ''), c.name) AS church_name, c.city, c.state,
-            c.smart_link, c.qr_image_url,
+            c.smart_link, c.qr_image_url, c.signup_token, (c.stripe_subscription_id IS NOT NULL) AS signed_up,
             COALESCE(NULLIF(c.pastor_name, ''), ls.preacher) AS pastor_name,
             COALESCE(NULLIF(c.pastor_email, ''), NULLIF(c.contact_email, ''),
                      (SELECT a.email FROM church_admins a WHERE a.church_id = c.id ORDER BY a.created_at, a.id LIMIT 1)) AS pastor_email,
@@ -80,13 +83,15 @@ export async function outreachRows({ withEmail = false } = {}) {
       latest_sermon_title: c.latest_sermon_title || "",
       demo_link: c.smart_link || smartLinkUrl(c.id),
       qr_image_url: c.qr_image_url || qrImageUrl(c.id),
+      signup_link: signupLinkFor(c.signup_token),
+      signed_up: !!c.signed_up,
       city: c.city || "",
       state: c.state || "",
     }))
     .filter((c) => !withEmail || c.pastor_email);
 }
 
-const CSV_COLS = ["church_id", "church_name", "pastor_name", "pastor_email", "latest_sermon_title", "demo_link", "qr_image_url", "city", "state"];
+const CSV_COLS = ["church_id", "church_name", "pastor_name", "pastor_email", "latest_sermon_title", "demo_link", "signup_link", "signed_up", "qr_image_url", "city", "state"];
 const csvCell = (v) => {
   let s = String(v ?? "");
   if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // keep spreadsheets from treating a value as a formula

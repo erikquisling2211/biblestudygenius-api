@@ -22,6 +22,7 @@ import Stripe from "stripe";
 import QRCode from "qrcode";
 import { ensureSmartLink, shareLinkFor, mountSmartLinks } from "./smartlinks.js";
 import { mountOutreach } from "./outreach.js";
+import { mountStartLinks } from "./startlink.js";
 import { mountChurchExtras, upcomingEvents, extraStats, hasUpcomingManualEvents } from "./churchextras.js";
 
 const CHURCH_JWT_SECRET = process.env.CHURCH_JWT_SECRET || process.env.ADMIN_TOKEN || "bsg-church-dev-secret";
@@ -435,6 +436,39 @@ function cleanGivingUrl(u) {
   return /^https?:\/\/\S+$/i.test(v) && v.length <= 500 ? v : null;
 }
 
+// Create (or reset) a church's dashboard login with a temporary password and email it.
+// Returns the temporary password, or null when there's no email.
+async function provisionLogin(church, email, { needsSetup = false } = {}) {
+  if (!email) return null;
+  const tempPassword = Math.random().toString(36).slice(2, 10) + "A9!";
+  const hash = await bcrypt.hash(tempPassword, 10);
+  await pool.query(
+    `INSERT INTO church_admins (church_id,email,password_hash,created_at) VALUES ($1,$2,$3,$4)
+     ON CONFLICT (email) DO UPDATE SET church_id=EXCLUDED.church_id, password_hash=EXCLUDED.password_hash`,
+    [church.id, String(email).toLowerCase(), hash, Date.now()]
+  );
+  await sendWelcomeEmail(email, { churchName: church.display_name || church.name, tempPassword, needsSetup });
+  return tempPassword;
+}
+
+// A church already in our directory (e.g. from pastor outreach) pays through its sign-up link
+// (startlink.js): attach the subscription to that church instead of creating a duplicate.
+async function attachSubscription(churchId, { email, stripeCustomerId, stripeSubscriptionId }) {
+  const r = await pool.query(
+    `UPDATE churches SET stripe_customer_id = $2, stripe_subscription_id = $3, active = true,
+            contact_email = COALESCE(NULLIF(contact_email, ''), $4)
+      WHERE id = $1 RETURNING *`,
+    [churchId, stripeCustomerId || null, stripeSubscriptionId || null, email || null]
+  );
+  const church = r.rows[0];
+  if (!church) throw new Error(`attachSubscription: church ${churchId} not found`);
+  await ensureSmartLink(church.id);
+  const configured = !!(church.feed_url || church.youtube_url || church.scrape_url);
+  await provisionLogin(church, email, { needsSetup: !configured });
+  console.log(`🎉 Church ${church.id} (${church.name}) subscribed via its sign-up link${email ? "" : " — no login (no email)"}`);
+  return church;
+}
+
 async function onboardChurch({ name, city, state, email, sourceType, sourceUrl, givingUrl, stripeCustomerId, stripeSubscriptionId }) {
   const feedUrl = sourceType === "feed" ? sourceUrl : null;
   const youtubeUrl = sourceType === "youtube" ? sourceUrl : null;
@@ -457,17 +491,7 @@ async function onboardChurch({ name, city, state, email, sourceType, sourceUrl, 
   }
 
   // Provision a dashboard login with a temporary password.
-  let tempPassword = null;
-  if (email) {
-    tempPassword = Math.random().toString(36).slice(2, 10) + "A9!";
-    const hash = await bcrypt.hash(tempPassword, 10);
-    await pool.query(
-      `INSERT INTO church_admins (church_id,email,password_hash,created_at) VALUES ($1,$2,$3,$4)
-       ON CONFLICT (email) DO UPDATE SET church_id=EXCLUDED.church_id, password_hash=EXCLUDED.password_hash`,
-      [church.id, String(email).toLowerCase(), hash, Date.now()]
-    );
-    await sendWelcomeEmail(email, { churchName: church.name, tempPassword, needsSetup });
-  }
+  const tempPassword = await provisionLogin(church, email, { needsSetup });
   console.log(`🎉 Onboarded church ${church.id} (${church.name})${sourceType ? " via " + sourceType : " (card-first, awaiting setup)"}${tempPassword ? "" : " — no login (no email)"}`);
   return { churchId: church.id, tempPassword };
 }
@@ -609,6 +633,7 @@ ${items}
 export function mountChurches(app) {
   mountSmartLinks(app, { admin });
   mountOutreach(app, { admin });
+  mountStartLinks(app, { admin, stripe });
   initChurches().catch((e) => console.error("initChurches", e));
   mountChurchExtras(app, { admin, churchAuth });
 
@@ -1164,8 +1189,12 @@ export function mountChurches(app) {
         if (paid && !isChurchPlan) console.log(`💝 Checkout ${session.id} is not the church plan (donation) — no church created`);
         if (paid && isChurchPlan) {
           const dupe = await pool.query(`SELECT id FROM churches WHERE stripe_customer_id = $1 LIMIT 1`, [session.customer]);
-          if (!dupe.rows.length) {
-            const md = session.metadata || {};
+          const md = session.metadata || {};
+          const existingId = parseInt(md.existingChurchId, 10);
+          if (!dupe.rows.length && existingId) {
+            const email = (session.customer_details && session.customer_details.email) || session.customer_email || "";
+            await attachSubscription(existingId, { email, stripeCustomerId: session.customer, stripeSubscriptionId: session.subscription });
+          } else if (!dupe.rows.length) {
             // Detect-first: metadata carries name + detected source. Card-first (Payment Link):
             // no metadata, so pull the email Stripe collected and create a bare church to set up in the dashboard.
             const email = (session.customer_details && session.customer_details.email) || session.customer_email || md.email || "";
