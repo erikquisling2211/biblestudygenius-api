@@ -113,15 +113,16 @@ const PRIVACY_HTML = `<!doctype html>
 <body>
 <div class="wrap">
   <h1>Privacy Policy</h1>
-  <div class="eff">Bible Study Genius &middot; Last updated November 21, 2026</div>
+  <div class="eff">Bible Study Genius &middot; Last updated November 25, 2026</div>
   <p>This Privacy Policy explains how Codeus, Inc. ("Codeus," "we," "us") collects, uses, and protects information when you use the Bible Study Genius mobile application (the "App"). We built the App to respect your privacy: it is free, ad-free, and we do not sell your personal information.</p>
   <h2>Information We Collect</h2>
   <ul>
-    <li><strong>Account information.</strong> If you create an account, our authentication provider, Clerk, collects your email address and basic profile information to create and secure your account. You may also use the App as a guest without an account.</li>
+    <li><strong>Account information.</strong> If you create an account, our authentication provider, Supabase, collects your email address and basic profile information to create and secure your account. You may also use the App as a guest without an account.</li>
     <li><strong>App activity.</strong> We store your reading progress and in-app preferences so your experience carries across sessions and devices. If you are signed in, this may be associated with your account.</li>
     <li><strong>Diagnostics.</strong> We may collect limited, aggregated crash and performance data to keep the App stable. This is not used to identify you.</li>
   </ul>
-  <p>We do not display advertising and do not use advertising trackers.</p>
+  <p>We do not display advertising in the App. To measure whether our own ads for Bible Study Genius on Facebook and Instagram lead people to install the App, the App uses Meta's software development kit, which sends Meta basic app events (such as the App being installed or opened) along with a device identifier where your device allows it. On iPhone we do not ask to track you across other companies' apps and websites. We do not share your Bible reading, notes, highlights or account details with Meta.</p>
+  <p>We also collect anonymous usage statistics (such as which screens are opened and for how long) through PostHog to understand how the App is used and to improve it. These statistics are not tied to your name or email.</p>
   <h2>Church Visitor Connect Forms</h2>
   <p>A church's page in the App may offer an "I'm New / Plan a Visit" form. It is optional. If you send it, the details you enter (your name, email and/or phone number, the date you plan to visit, and any message) are shared with that church only, so it can contact you about visiting. We email them to the church's contact and show them in that church's private dashboard. They are stored securely, are never shown publicly, and are not used for anything else or sold. To have a submission deleted, contact the church or us at the address below.</p>
   <h2>Church Engagement</h2>
@@ -138,7 +139,9 @@ const PRIVACY_HTML = `<!doctype html>
   <h2>Service Providers</h2>
   <p>We share information only with providers that help us operate the App, each under their own privacy terms:</p>
   <ul>
-    <li><strong>Clerk</strong> &mdash; account authentication.</li>
+    <li><strong>Supabase</strong> &mdash; account authentication.</li>
+    <li><strong>Meta</strong> &mdash; measuring installs that come from our ads on Facebook and Instagram.</li>
+    <li><strong>PostHog</strong> &mdash; anonymous usage statistics.</li>
     <li><strong>Apple</strong> and <strong>Stripe</strong> &mdash; payment processing for optional contributions.</li>
     <li><strong>API.Bible / content providers</strong> &mdash; Scripture text and audio delivery.</li>
     <li><strong>Hosting and diagnostics providers</strong> &mdash; to run our backend and monitor stability.</li>
