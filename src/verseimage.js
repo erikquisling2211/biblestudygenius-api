@@ -22,7 +22,7 @@ const BG_FILES = [
   "votd-sunrise-5.jpg", "votd-sunrise-6.jpg", "votd-sunrise-7.jpg",
 ];
 let _bgPromise = null;
-function backgrounds() {
+export function backgrounds() {
   if (!_bgPromise) {
     _bgPromise = Promise.all(
       BG_FILES.map((f) => loadImage(path.join(BG_DIR, f)).catch((e) => { console.error("bg load", f, e && e.message); return null; }))
@@ -109,7 +109,8 @@ export function renderVerse({ text, ref, translation, red, bg }) {
   for (const ln of lines) { ctx.fillText(ln, W / 2, y); y += lh; }
 
   ctx.fillStyle = "#edc756";
-  ctx.font = "46px VerseSerifB";
+  let refSize = 46; // shrink long labels (e.g. a church name on a sermon quote card) to fit the frame
+  do { ctx.font = refSize + "px VerseSerifB"; } while (ctx.measureText(ref).width > 900 && (refSize -= 2) >= 26);
   ctx.fillText(ref, W / 2, 460 + blockH / 2 + 84);
 
   ctx.fillStyle = "#c3cadb";

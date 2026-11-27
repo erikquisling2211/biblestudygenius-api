@@ -24,6 +24,7 @@ import { ensureSmartLink, shareLinkFor, mountSmartLinks } from "./smartlinks.js"
 import { mountOutreach } from "./outreach.js";
 import { mountStartLinks } from "./startlink.js";
 import { mountChurchExtras, upcomingEvents, extraStats, hasUpcomingManualEvents } from "./churchextras.js";
+import { mountChurchPro, initChurchPro, proStats, isPro, churchesNearZip, PRO_SQL } from "./churchpro.js";
 
 const CHURCH_JWT_SECRET = process.env.CHURCH_JWT_SECRET || process.env.ADMIN_TOKEN || "bsg-church-dev-secret";
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
@@ -260,6 +261,7 @@ async function churchStats(id) {
     shares: shares.rows[0].n,
     topSermons: perSermon.rows,
     ...(await extraStats(id)),
+    ...(await proStats(id)),
   };
 }
 
@@ -634,8 +636,9 @@ export function mountChurches(app) {
   mountSmartLinks(app, { admin });
   mountOutreach(app, { admin });
   mountStartLinks(app, { admin, stripe });
-  initChurches().catch((e) => console.error("initChurches", e));
+  initChurches().then(initChurchPro).catch((e) => console.error("initChurches", e));
   mountChurchExtras(app, { admin, churchAuth });
+  mountChurchPro(app, { admin, churchAuth });
 
   // Serve brand imagery (sunrise photos, app icon) for the website — e.g.
   // /assets/votd/votd-sunrise.jpg, /assets/brand/icon.png
@@ -1225,9 +1228,14 @@ export function mountChurches(app) {
     const q = String(req.query.q || "").trim();
     if (!q) return res.json({ churches: [] });
     try {
+      // A ZIP lists every church within 25 miles; paid churches come first, tagged "featured".
+      if (/^\d{5}$/.test(q)) {
+        const near = await churchesNearZip(q, { radius: 25, limit: 40 });
+        if (near) return res.json({ churches: near, zip: q });
+      }
       const r = await pool.query(
-        `SELECT id,name,city,state,zip,denomination,website FROM churches
-          WHERE active AND (name ILIKE $1 OR aliases ILIKE $1 OR zip = $2) ORDER BY name LIMIT 25`,
+        `SELECT c.id,c.name,c.city,c.state,c.zip,c.denomination,c.website, ${PRO_SQL} AS featured FROM churches c
+          WHERE c.active AND (c.name ILIKE $1 OR c.aliases ILIKE $1 OR c.zip = $2) ORDER BY ${PRO_SQL} DESC, c.name LIMIT 25`,
         [`%${q}%`, q]
       );
       res.json({ churches: r.rows });
@@ -1298,6 +1306,8 @@ export function mountChurches(app) {
       if (!c.rows[0].hasEvents) c.rows[0].hasEvents = await hasUpcomingManualEvents(id);
       c.rows[0].visitorConnect = true; // the app shows the "I'm New / Plan a Visit" card
       const sermons = await churchSermons(id, 50);
+      // Paid listing: sermon search, leader guide link and the midweek email sign-up in the app.
+      c.rows[0].pro = await isPro(id);
       res.json({ church: c.rows[0], sermon: sermons[0] || null, sermons });
     } catch (e) {
       res.status(500).json({ error: String((e && e.message) || e) });
@@ -1306,7 +1316,8 @@ export function mountChurches(app) {
 
   // --- Engagement analytics ---
   const EVENT_TYPES = new Set(["follow", "unfollow", "play", "video_play", "plan_open", "download", "view", "share",
-    "quiz_start", "quiz_complete", "event_view", "event_reminder", "visitor_open"]);
+    "quiz_start", "quiz_complete", "event_view", "event_reminder", "visitor_open",
+    "featured_view", "sermon_search", "guide_open", "midweek_signup"]);
 
   // App posts anonymous engagement events here (no auth, no PII — just an anon device id).
   app.post("/events", async (req, res) => {

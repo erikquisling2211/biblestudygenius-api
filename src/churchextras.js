@@ -26,6 +26,7 @@
  *  Tables are created in churches.js initChurches().
  */
 import { pool } from "./db.js";
+import { welcomeVisitor } from "./churchpro.js";
 import { fetchIcsEvents, normalizeCalendarUrl, zonedToEpoch, fmtWhen, DEFAULT_TZ, sermonQuiz, transcribeAudioUrl } from "./sermonprocess.js";
 
 const tzOf = (church) => {
@@ -329,6 +330,8 @@ export function mountChurchExtras(app, { admin, churchAuth }) {
       emailVisitor(churchId, { name, email, phone, visitDate, message })
         .then((sent) => sent && pool.query(`UPDATE visitor_connects SET emailed_at = $1 WHERE id = $2`, [Date.now(), id]))
         .catch(() => {});
+      // Paid listing: an instant welcome email to the visitor, in the church's own words.
+      welcomeVisitor(churchId, id, { name, email, visitDate }).catch(() => {});
     } catch (e) { err(res, e, "POST /church/:id/visitor"); }
   });
 
@@ -462,6 +465,36 @@ const DASHBOARD_HTML = `<!doctype html>
     <div class="grid" id="stats"></div>
     <div id="quizTable"></div>
 
+    <div id="pro" class="hide">
+      <h2 style="font-size:24px;margin-bottom:2px">Sermon Studio</h2>
+      <p class="sub">A suite of tools that turns your Sunday sermon into a full week of discipleship.</p>
+      <h2>This week's sermon kit</h2>
+      <p class="sub">Made from Sunday's sermon every Monday. It's emailed to you, and the guide goes to your small-group leaders.</p>
+      <div class="card" id="kit"></div>
+
+      <h2>Small-group leaders</h2>
+      <p class="sub">Each leader gets the small-group guide by email every Monday morning.</p>
+      <div class="card">
+        <label>Add leaders: one per line, like “Jane Smith jane@example.com”</label>
+        <textarea id="ldtext" rows="3"></textarea>
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button id="ldadd">Add</button><button class="ghost" id="ldsend">Send this week's guide to leaders now</button></div>
+        <div id="ldmsg" class="msg"></div>
+        <table id="ldt" style="margin-top:10px"></table>
+      </div>
+
+      <h2>Visitor welcome email</h2>
+      <p class="sub">When someone taps “I’m New / Plan a Visit” and leaves an email, they get this right away. Replies come to your church email. {name}, {church} and {date} fill in automatically.</p>
+      <div class="card">
+        <textarea id="wmsg" rows="9"></textarea>
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button id="wsave">Save</button><button class="ghost" id="wtest">Send me a test</button></div>
+        <div id="wmsgout" class="msg"></div>
+        <p class="msg">If a visitor is still marked “new” after two days, we’ll send you a reminder.</p>
+      </div>
+
+      <h2>Midweek email</h2>
+      <div class="card"><p style="margin:0" id="mwtext"></p></div>
+    </div>
+
     <h2>Visitor Connect <span id="vcount" class="pill"></span></h2>
     <p class="sub">People who tapped “I’m New / Plan a Visit” on your church’s page. Each one is also emailed to your church contact.</p>
     <div class="card scroll"><div style="text-align:right;margin-bottom:8px"><button class="ghost" id="csv">Download CSV</button></div><table id="vt"></table></div>
@@ -508,7 +541,9 @@ const DASHBOARD_HTML = `<!doctype html>
       stat(s.quizStarts,'Quiz starts') + stat(s.quizCompletions,'Quiz completions') +
       stat(s.quizAvgScorePct==null?'—':s.quizAvgScorePct+'%','Average quiz score') +
       stat(s.eventViews,'Event list views') + stat(s.eventReminders,'Event reminders set') +
-      stat(s.visitorSubmissions,'Visitor Connect forms') + stat(s.visitorSubmissionsLast7,'Visitor forms, last 7 days');
+      stat(s.visitorSubmissions,'Visitor Connect forms') + stat(s.visitorSubmissionsLast7,'Visitor forms, last 7 days') +
+      (s.pro ? stat(s.peopleNearbySawYouLast30,'People nearby who saw your church, last 30 days') + stat(s.sermonSearches,'Sermon searches') +
+        stat(s.midweekSubscribers,'Midweek email members') + stat(s.groupLeaders,'Small-group leaders') + stat(s.visitorsWelcomed,'Visitors welcomed by email') : '');
     var q = s.quizBySermon||[];
     $('quizTable').innerHTML = q.length ? '<div class="card scroll" style="margin-top:12px"><strong>Quiz by sermon</strong><table style="margin-top:8px"><tr><th>Sermon</th><th>Completions</th><th>Average score</th></tr>'+
       q.map(function(r){return '<tr><td>'+esc(r.title||('Sermon '+r.sermonId))+'</td><td>'+r.completions+'</td><td>'+(r.avgScorePct==null?'—':r.avgScorePct+'%')+'</td></tr>';}).join('')+'</table></div>' : '';
@@ -538,9 +573,36 @@ const DASHBOARD_HTML = `<!doctype html>
   $('ef').onsubmit = function(e){ e.preventDefault(); $('emsg').className='msg'; $('emsg').textContent='';
     api('/church/me/events',{method:'POST',body:JSON.stringify({title:$('et').value,date:$('ed').value,time:$('es').value,endTime:$('ee').value,location:$('el').value})})
       .then(function(){ $('ef').reset(); $('emsg').textContent='Added.'; return loadEvents(); }).catch(function(err){ $('emsg').className='msg err'; $('emsg').textContent=err.message; }); };
+  function loadPro(){ return api('/church/me/pro').then(function(p){
+    $('pro').className = p.pro ? '' : 'hide';
+    if (!p.pro) return;
+    var k = p.kit;
+    $('kit').innerHTML = !k ? '<p class="msg">Your kit appears here after your first sermon is processed.</p>' :
+      '<strong>'+esc(k.title||'Latest sermon')+'</strong>'+(k.theme?'<p class="msg">'+esc(k.theme)+'</p>':'')+
+      '<p><a href="'+esc(k.guideUrl)+'" target="_blank" rel="noopener">Open the small-group guide</a> ('+k.questions+' questions with leader notes)</p>'+
+      (k.quotes.length ? '<p style="margin:14px 0 6px"><strong>Quote cards for social media</strong></p><div class="grid">'+k.quotes.map(function(q,i){
+        return '<div><a href="'+esc(q.imageUrl)+'?download=1"><img src="'+esc(q.imageUrl)+'" style="width:100%;border-radius:8px" alt="Quote card '+(i+1)+'"></a>'+
+          '<div class="msg">'+esc(q.caption||'')+'</div><a class="msg" href="'+esc(q.imageUrl)+'?download=1">Download</a></div>'; }).join('')+'</div>'
+        : '<p class="msg">'+(k.fallback?'Quote cards need the sermon audio transcript, which this sermon doesn’t have.':'No quote cards this week.')+'</p>')+
+      (k.midweek && k.midweek.keyVerse ? '<p class="msg" style="margin-top:14px">Midweek email: key verse '+esc(k.midweek.keyVerse)+' · “'+esc(k.midweek.question||'')+'”</p>' : '')+
+      '<div style="margin-top:10px"><button class="ghost" id="kitre">Rebuild kit</button> <span id="kitmsg" class="msg"></span></div>';
+    var L = p.leaders||[];
+    $('ldt').innerHTML = L.length ? '<tr><th>Name</th><th>Email</th><th></th></tr>'+L.map(function(l){ return '<tr><td>'+esc(l.name||'')+'</td><td>'+esc(l.email)+(l.unsubscribed?' <span class="pill archived">unsubscribed</span>':'')+'</td><td><button class="ghost" data-ld="'+l.id+'">Remove</button></td></tr>'; }).join('')
+      : '<tr><td class="msg">No leaders yet.</td></tr>';
+    if (!$('wmsg').dataset.loaded) { $('wmsg').value = p.welcomeMessage||''; $('wmsg').dataset.loaded='1'; }
+    $('mwtext').textContent = p.midweekSubscribers + (p.midweekSubscribers===1?' member has':' members have') + ' signed up on your church page in the app. Each Wednesday morning they get the key verse from Sunday, one question to think about, and a link to the sermon quiz.';
+  }); }
+  $('kit').onclick = function(e){ if(e.target.id!=='kitre') return; $('kitmsg').textContent='Rebuilding… (about 30 seconds)';
+    api('/church/me/kit/rebuild',{method:'POST'}).then(loadPro).catch(function(err){ $('kitmsg').textContent=err.message; }); };
+  $('ldadd').onclick = function(){ $('ldmsg').className='msg'; api('/church/me/leaders',{method:'POST',body:JSON.stringify({text:$('ldtext').value})}).then(function(j){ $('ldtext').value=''; $('ldmsg').textContent='Added '+j.added+'.'; return loadPro(); }).catch(function(err){ $('ldmsg').className='msg err'; $('ldmsg').textContent=err.message; }); };
+  $('ldsend').onclick = function(){ if(!confirm('Email this week’s guide to all your leaders now?')) return; $('ldmsg').className='msg'; $('ldmsg').textContent='Sending…';
+    api('/church/me/kit/send-leaders',{method:'POST'}).then(function(j){ $('ldmsg').textContent = j.sent ? 'Sent to '+j.sent+' leader'+(j.sent===1?'':'s')+'.' : 'Nothing sent ('+(j.reason||'no leaders')+').'; }).catch(function(err){ $('ldmsg').className='msg err'; $('ldmsg').textContent=err.message; }); };
+  $('ldt').onclick = function(e){ var b=e.target.closest('button[data-ld]'); if(!b||!confirm('Remove this leader?')) return; api('/church/me/leaders/'+b.getAttribute('data-ld'),{method:'DELETE'}).then(loadPro).catch(function(err){alert(err.message);}); };
+  $('wsave').onclick = function(){ api('/church/me/welcome',{method:'POST',body:JSON.stringify({message:$('wmsg').value})}).then(function(j){ $('wmsg').value=j.welcomeMessage; $('wmsgout').textContent='Saved.'; }).catch(function(err){ $('wmsgout').textContent=err.message; }); };
+  $('wtest').onclick = function(){ api('/church/me/welcome',{method:'POST',body:JSON.stringify({message:$('wmsg').value})}).then(function(){ return api('/church/me/welcome/test',{method:'POST'}); }).then(function(j){ $('wmsgout').textContent = j.ok ? 'Test sent to '+j.sentTo+'.' : (j.error || 'The test email couldn’t be sent.'); }).catch(function(err){ $('wmsgout').textContent=err.message; }); };
   function start(){ $('login').className='hide'; $('app').className='';
     api('/church/me').then(function(j){ $('cname').textContent = (j.church && (j.church.displayName||j.church.name)) || 'Your church'; }).catch(function(){});
-    loadStats().catch(function(){}); loadVisitors().catch(function(){}); loadEvents().catch(function(){}); }
+    loadStats().catch(function(){}); loadPro().catch(function(){}); loadVisitors().catch(function(){}); loadEvents().catch(function(){}); }
   if (tok) start();
 })();
 </script>
