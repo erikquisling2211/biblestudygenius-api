@@ -492,7 +492,16 @@ const DASHBOARD_HTML = `<!doctype html>
       </div>
 
       <h2>Midweek email</h2>
-      <div class="card"><p style="margin:0" id="mwtext"></p></div>
+      <p class="sub">Every Wednesday morning, your members get the key verse from Sunday, one question to think about, and a link to the sermon quiz. Each email has an unsubscribe link, and anyone who unsubscribes is never added back.</p>
+      <div class="card">
+        <p style="margin:0 0 10px" id="mwtext"></p>
+        <label>Paste your member email list, or upload a CSV export from your church software (Planning Center, Mailchimp, Breeze, etc.)</label>
+        <textarea id="mbtext" rows="4" placeholder="jane@example.com&#10;bob@example.com"></textarea>
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button id="mbadd">Add to list</button>
+          <label style="margin:0;cursor:pointer;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:var(--gold);font-weight:700;font-size:13px">Upload CSV<input id="mbfile" type="file" accept=".csv,.txt,text/csv,text/plain" style="display:none"></label></div>
+        <div id="mbmsg" class="msg"></div>
+        <div class="row" style="margin-top:14px"><div><label>Remove someone</label><input id="mbrm" type="email" placeholder="email@example.com"></div><div style="flex:0 0 auto"><button class="ghost" id="mbrmb">Remove</button></div></div>
+      </div>
     </div>
 
     <h2>Visitor Connect <span id="vcount" class="pill"></span></h2>
@@ -590,7 +599,7 @@ const DASHBOARD_HTML = `<!doctype html>
     $('ldt').innerHTML = L.length ? '<tr><th>Name</th><th>Email</th><th></th></tr>'+L.map(function(l){ return '<tr><td>'+esc(l.name||'')+'</td><td>'+esc(l.email)+(l.unsubscribed?' <span class="pill archived">unsubscribed</span>':'')+'</td><td><button class="ghost" data-ld="'+l.id+'">Remove</button></td></tr>'; }).join('')
       : '<tr><td class="msg">No leaders yet.</td></tr>';
     if (!$('wmsg').dataset.loaded) { $('wmsg').value = p.welcomeMessage||''; $('wmsg').dataset.loaded='1'; }
-    $('mwtext').textContent = p.midweekSubscribers + (p.midweekSubscribers===1?' member has':' members have') + ' signed up on your church page in the app. Each Wednesday morning they get the key verse from Sunday, one question to think about, and a link to the sermon quiz.';
+    $('mwtext').innerHTML = '<strong>'+p.midweekSubscribers+'</strong> '+(p.midweekSubscribers===1?'person is':'people are')+' on your midweek email list.';
   }); }
   $('kit').onclick = function(e){ if(e.target.id!=='kitre') return; $('kitmsg').textContent='Rebuilding… (about 30 seconds)';
     api('/church/me/kit/rebuild',{method:'POST'}).then(loadPro).catch(function(err){ $('kitmsg').textContent=err.message; }); };
@@ -600,6 +609,13 @@ const DASHBOARD_HTML = `<!doctype html>
   $('ldt').onclick = function(e){ var b=e.target.closest('button[data-ld]'); if(!b||!confirm('Remove this leader?')) return; api('/church/me/leaders/'+b.getAttribute('data-ld'),{method:'DELETE'}).then(loadPro).catch(function(err){alert(err.message);}); };
   $('wsave').onclick = function(){ api('/church/me/welcome',{method:'POST',body:JSON.stringify({message:$('wmsg').value})}).then(function(j){ $('wmsg').value=j.welcomeMessage; $('wmsgout').textContent='Saved.'; }).catch(function(err){ $('wmsgout').textContent=err.message; }); };
   $('wtest').onclick = function(){ api('/church/me/welcome',{method:'POST',body:JSON.stringify({message:$('wmsg').value})}).then(function(){ return api('/church/me/welcome/test',{method:'POST'}); }).then(function(j){ $('wmsgout').textContent = j.ok ? 'Test sent to '+j.sentTo+'.' : (j.error || 'The test email couldn’t be sent.'); }).catch(function(err){ $('wmsgout').textContent=err.message; }); };
+  function addMembers(text){ $('mbmsg').className='msg'; $('mbmsg').textContent='Adding…';
+    api('/church/me/members',{method:'POST',body:JSON.stringify({text:text})}).then(function(j){
+      $('mbtext').value=''; $('mbmsg').textContent='Found '+j.found+' email'+(j.found===1?'':'s')+': added '+j.added+(j.alreadyOnList?', '+j.alreadyOnList+' already on the list':'')+(j.unsubscribed?', '+j.unsubscribed+' had unsubscribed and were not added back':'')+'.'; return loadPro(); })
+      .catch(function(err){ $('mbmsg').className='msg err'; $('mbmsg').textContent=err.message; }); }
+  $('mbadd').onclick = function(){ addMembers($('mbtext').value); };
+  $('mbfile').onchange = function(){ var f=this.files&&this.files[0]; if(!f) return; var r=new FileReader(); r.onload=function(){ addMembers(String(r.result||'')); }; r.readAsText(f); this.value=''; };
+  $('mbrmb').onclick = function(){ api('/church/me/members/remove',{method:'POST',body:JSON.stringify({text:$('mbrm').value})}).then(function(j){ $('mbrm').value=''; $('mbmsg').className='msg'; $('mbmsg').textContent = j.removed ? 'Removed.' : 'That email wasn’t on the list.'; return loadPro(); }).catch(function(err){ $('mbmsg').className='msg err'; $('mbmsg').textContent=err.message; }); };
   function start(){ $('login').className='hide'; $('app').className='';
     api('/church/me').then(function(j){ $('cname').textContent = (j.church && (j.church.displayName||j.church.name)) || 'Your church'; }).catch(function(){});
     loadStats().catch(function(){}); loadPro().catch(function(){}); loadVisitors().catch(function(){}); loadEvents().catch(function(){}); }

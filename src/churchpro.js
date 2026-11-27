@@ -707,6 +707,36 @@ ${guideHtmlBody(c, s, kit)}<div class="p"><button onclick="window.print()">Print
     } catch (e) { err(res, e, "POST /church/me/welcome/test"); }
   });
 
+  // --- dashboard: the church's member email list for the midweek email (pasted or uploaded as CSV) ---
+  // Someone who unsubscribed stays unsubscribed even if the church uploads their address again.
+  const EMAILS_IN = /[^\s<>"',;]+@[^\s<>"',;]+\.[^\s<>"',;]{2,}/g;
+  app.post("/church/me/members", churchAuth, async (req, res) => {
+    const text = String((req.body && req.body.text) || "").slice(0, 2000000);
+    const emails = [...new Set((text.match(EMAILS_IN) || []).map((e) => e.toLowerCase()).filter((e) => EMAIL_RE.test(e)))].slice(0, 20000);
+    if (!emails.length) return res.status(400).json({ error: "We didn't find any email addresses in that." });
+    try {
+      let added = 0;
+      for (let i = 0; i < emails.length; i += 500) {
+        const chunk = emails.slice(i, i + 500);
+        const vals = [], params = [];
+        chunk.forEach((e, k) => { vals.push(`($1, $2, $${k * 2 + 3}, $${k * 2 + 4})`); params.push(e, newToken()); });
+        const r = await pool.query(`INSERT INTO church_subscribers (church_id, created_at, email, token) VALUES ${vals.join(",")} ON CONFLICT (church_id, email) DO NOTHING`,
+          [req.church.churchId, Date.now(), ...params]);
+        added += r.rowCount;
+      }
+      const unsub = (await pool.query(`SELECT COUNT(*)::int AS n FROM church_subscribers WHERE church_id = $1 AND unsub_at IS NOT NULL AND email = ANY($2::text[])`, [req.church.churchId, emails])).rows[0].n;
+      res.json({ ok: true, found: emails.length, added, alreadyOnList: emails.length - added - unsub, unsubscribed: unsub });
+    } catch (e) { err(res, e, "POST /church/me/members"); }
+  });
+  app.post("/church/me/members/remove", churchAuth, async (req, res) => {
+    const emails = (String((req.body && req.body.text) || "").match(EMAILS_IN) || []).map((e) => e.toLowerCase());
+    if (!emails.length) return res.status(400).json({ error: "Add the email address to remove." });
+    try {
+      const r = await pool.query(`DELETE FROM church_subscribers WHERE church_id = $1 AND email = ANY($2::text[]) AND unsub_at IS NULL`, [req.church.churchId, emails]);
+      res.json({ ok: true, removed: r.rowCount });
+    } catch (e) { err(res, e, "POST /church/me/members/remove"); }
+  });
+
   // --- admin ---
   app.post("/admin/church/:id/pro", async (req, res) => {
     if (!admin(req)) return res.status(401).json({ error: "unauthorized" });
