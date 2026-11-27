@@ -1,5 +1,5 @@
 /**
- * churchpro.js — "Sermon Echo", what a church gets with the paid listing ($149/mo or $1,490/yr):
+ * churchpro.js — "Sermon Reach", what a church gets with the paid listing ($149/mo or $1,490/yr):
  * a suite of tools that turns the Sunday sermon into a full week of discipleship. Free directory
  * churches get none of this. "Pro" = churches.pro (set by admin) OR a Stripe subscription OR a dashboard login.
  *
@@ -78,13 +78,13 @@ export async function isPro(churchId) {
 }
 
 /* ---------------- email ---------------- */
-// Off switch: Sermon Echo sends nothing until Railway has SERMON_STUDIO_EMAILS=on. While off, the weekly
+// Off switch: Sermon Reach sends nothing until Railway has SERMON_STUDIO_EMAILS=on. While off, the weekly
 // jobs still build each sermon's kit (so the dashboard shows it) but send and record nothing, so the first
 // real week goes out normally once the switch is turned on.
 export const emailsOn = () => process.env.SERMON_STUDIO_EMAILS === "on";
-const EMAILS_OFF = "Sermon Echo emails are turned off for now.";
+const EMAILS_OFF = "Sermon Reach emails are turned off for now.";
 async function sendEmail({ to, subject, html, text, replyTo, fromName, unsubscribeUrl }) {
-  if (!emailsOn()) { console.log(`✉️  (Sermon Echo emails off) not sending "${subject}"`); return false; }
+  if (!emailsOn()) { console.log(`✉️  (Sermon Reach emails off) not sending "${subject}"`); return false; }
   if (!process.env.RESEND_API_KEY) { console.log(`✉️  (no RESEND_API_KEY) would send "${subject}" to ${[].concat(to).join(", ")}`); return false; }
   const addr = (process.env.RESEND_FROM || "Bible Study Genius <hello@biblestudygenius.com>").match(/<([^>]+)>/);
   const from = fromName ? `${String(fromName).replace(/[<>"\r\n]/g, "").slice(0, 70)} <${addr ? addr[1] : "hello@biblestudygenius.com"}>` : (process.env.RESEND_FROM || "Bible Study Genius <hello@biblestudygenius.com>");
@@ -299,7 +299,7 @@ async function sendStaffKit(church, s) {
   const cards = (kit.quotes || []).map((qt, i) =>
     `<div style="margin:0 0 18px"><a href="${esc(quoteUrl(church.id, s.id, i + 1))}"><img src="${esc(quoteUrl(church.id, s.id, i + 1))}" width="260" height="260" alt="Quote card ${i + 1}" style="border-radius:8px;display:block"></a>
       <div style="font-size:13px;color:#5b5878;margin-top:6px">Caption idea: ${esc(qt.caption || qt.text)}</div></div>`).join("");
-  const inner = `<p style="margin:0 0 2px;color:#9a7b1a;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Sermon Echo</p>
+  const inner = `<p style="margin:0 0 2px;color:#9a7b1a;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Sermon Reach</p>
     <h2 style="margin:0 0 6px;font-size:20px">This week's sermon kit</h2>
     <p style="margin:0 0 16px;color:#5b5878">Everything is ready from “${esc(s.title || "Sunday's sermon")}”.</p>
     <p style="margin:0 0 6px"><b>Small-group guide</b>: <a href="${esc(guideUrl(church.id, s.id))}" style="color:#9a7b1a">open / print</a>.</p>
@@ -738,7 +738,7 @@ fetch(${JSON.stringify(`/church/${id}/subscribe`)},{method:'POST',headers:{'Cont
   });
   app.post("/church/me/kit/rebuild", churchAuth, async (req, res) => {
     try {
-      if (!(await isPro(req.church.churchId))) return res.status(403).json({ error: "Part of Sermon Echo." });
+      if (!(await isPro(req.church.churchId))) return res.status(403).json({ error: "Part of Sermon Reach." });
       const s = await latestSermonRow(req.church.churchId);
       if (!s) return res.status(404).json({ error: "No sermon yet." });
       const kit = await buildKit(s.id, { force: true });
@@ -748,7 +748,7 @@ fetch(${JSON.stringify(`/church/${id}/subscribe`)},{method:'POST',headers:{'Cont
   app.post("/church/me/kit/send-leaders", churchAuth, async (req, res) => {
     try {
       const c = (await pool.query(`SELECT c.*, ${PRO_SQL} AS is_pro FROM churches c WHERE c.id = $1`, [req.church.churchId])).rows[0];
-      if (!c || !c.is_pro) return res.status(403).json({ error: "Part of Sermon Echo." });
+      if (!c || !c.is_pro) return res.status(403).json({ error: "Part of Sermon Reach." });
       const s = await latestSermonRow(c.id);
       if (!s) return res.status(404).json({ error: "No sermon yet." });
       res.json({ ok: true, ...(await sendLeaderGuide(c, s, { force: true })) });

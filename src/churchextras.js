@@ -466,7 +466,7 @@ const DASHBOARD_HTML = `<!doctype html>
     <div id="quizTable"></div>
 
     <div id="pro" class="hide">
-      <h2 style="font-size:24px;margin-bottom:2px">Sermon Echo</h2>
+      <h2 style="font-size:24px;margin-bottom:2px">Sermon Reach</h2>
       <p class="sub">A suite of tools that turns your Sunday sermon into a full week of discipleship.</p>
       <h2>This week's sermon kit</h2>
       <p class="sub">Made from Sunday's sermon every Monday. It's emailed to you, and the guide goes to your small-group leaders.</p>
