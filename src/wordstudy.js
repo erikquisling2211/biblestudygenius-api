@@ -39,6 +39,10 @@ function ensureLoaded() {
 }
 
 // Build a Strong's -> verse list index once, from the tagged OT/NT text.
+// Canonical book order, so a word's verse list runs Genesis → Revelation (not alphabetical by book id).
+const BOOK_ORDER = ["genesis","exodus","leviticus","numbers","deuteronomy","joshua","judges","ruth","1-samuel","2-samuel","1-kings","2-kings","1-chronicles","2-chronicles","ezra","nehemiah","esther","job","psalms","proverbs","ecclesiastes","song-of-solomon","isaiah","jeremiah","lamentations","ezekiel","daniel","hosea","joel","amos","obadiah","jonah","micah","nahum","habakkuk","zephaniah","haggai","zechariah","malachi","matthew","mark","luke","john","acts","romans","1-corinthians","2-corinthians","galatians","ephesians","philippians","colossians","1-thessalonians","2-thessalonians","1-timothy","2-timothy","titus","philemon","hebrews","james","1-peter","2-peter","1-john","2-john","3-john","jude","revelation"];
+const BOOK_RANK = Object.fromEntries(BOOK_ORDER.map((b, i) => [b, i]));
+
 function buildConc() {
   if (CONC) return CONC;
   ensureLoaded();
@@ -59,6 +63,8 @@ function buildConc() {
       }
     }
   }
+  const rank = (b) => (b in BOOK_RANK ? BOOK_RANK[b] : 999);
+  for (const st of Object.keys(CONC)) CONC[st].sort((x, y) => rank(x.b) - rank(y.b) || x.c - y.c || x.v - y.v);
   return CONC;
 }
 
@@ -118,7 +124,8 @@ export function mountWordStudy(app) {
       const idx = buildConc();
       const st = String(req.params.strongs);
       const all = idx[st] || [];
-      const LIMIT = 500;
+      // ?all=1 (verse search) gets every verse; the word card keeps the shorter list.
+      const LIMIT = req.query.all === "1" ? 20000 : 500;
       res.json({ strongs: st, count: all.length, refs: all.slice(0, LIMIT), truncated: all.length > LIMIT });
     } catch (e) {
       console.error("GET /concordance", e);
