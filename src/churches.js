@@ -1470,10 +1470,10 @@ export function mountChurches(app) {
         smartLink: shareLinkFor(church),
         qrUrl,
         announcements: {
-          pulpit: `We've put ${name} on Bible Study Genius — a free app that turns every sermon into a daily study plan for the whole week. Scan the code on the screen to follow us, and keep this week's message going all week. If the app doesn't open to our church after you install it, tap My Church and search ${name}.`,
-          bulletin: `📱 Follow ${name} on the free Bible Study Genius app — every sermon becomes a week of daily study, plus streaming and our own podcast. Follow us: ${shareUrl}`,
-          email: `${name} is now on Bible Study Genius, a free Bible app. Follow us there and each Sunday's sermon becomes a daily study plan you can walk through all week — with sermon streaming and our own podcast. Download the free app and follow us here: ${shareUrl}`,
-          text: `Follow ${name} on the free Bible Study Genius app and keep Sunday's sermon going all week: ${shareUrl}`,
+          pulpit: `We have a gift for you. ${name} is now on Bible Study Genius, a free Bible app, and every Sunday's sermon will be waiting for you there, with a daily study plan to walk through all week. It costs you nothing. Scan the code on the screen to follow us. If the app doesn't open to our church after you install it, tap My Church and search ${name}.`,
+          bulletin: `🎁 A gift for you: follow ${name} on the free Bible Study Genius app. Every sermon becomes a week of daily study, plus streaming and our own podcast. Follow us: ${shareUrl}`,
+          email: `We have a gift for you. ${name} is now on Bible Study Genius, a free Bible app. Follow us there and each Sunday's sermon becomes a daily study plan you can walk through all week, with sermon streaming and our own podcast. It costs you nothing. Download the free app and follow us here: ${shareUrl}`,
+          text: `A gift from ${name}: follow us on the free Bible Study Genius app and keep Sunday's sermon going all week: ${shareUrl}`,
         },
       });
     } catch (e) {
