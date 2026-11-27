@@ -1470,9 +1470,9 @@ export function mountChurches(app) {
         smartLink: shareLinkFor(church),
         qrUrl,
         announcements: {
-          pulpit: `We have a gift for you. ${name} is now on Bible Study Genius, a free Bible app, and every Sunday's sermon will be waiting for you there, with a daily study plan to walk through all week. It costs you nothing. Scan the code on the screen to follow us. If the app doesn't open to our church after you install it, tap My Church and search ${name}.`,
-          bulletin: `🎁 A gift for you: follow ${name} on the free Bible Study Genius app. Every sermon becomes a week of daily study, plus streaming and our own podcast. Follow us: ${shareUrl}`,
-          email: `We have a gift for you. ${name} is now on Bible Study Genius, a free Bible app. Follow us there and each Sunday's sermon becomes a daily study plan you can walk through all week, with sermon streaming and our own podcast. It costs you nothing. Download the free app and follow us here: ${shareUrl}`,
+          pulpit: `We have a gift for you. ${name} is now on Bible Study Genius, a free Bible app, and every Sunday's sermon will be waiting for you there, with a daily study plan to walk through all week and a short quiz to see what stuck. It costs you nothing. Scan the code on the screen to follow us. If the app doesn't open to our church after you install it, tap My Church and search ${name}.`,
+          bulletin: `🎁 A gift for you: follow ${name} on the free Bible Study Genius app. Every sermon becomes a week of daily study and a quiz, plus streaming and our own podcast. Follow us: ${shareUrl}`,
+          email: `We have a gift for you. ${name} is now on Bible Study Genius, a free Bible app. Follow us there and each Sunday's sermon becomes a daily study plan you can walk through all week and a short quiz to see what stuck, with sermon streaming and our own podcast. It costs you nothing. Download the free app and follow us here: ${shareUrl}`,
           text: `A gift from ${name}: follow us on the free Bible Study Genius app and keep Sunday's sermon going all week: ${shareUrl}`,
         },
       });
