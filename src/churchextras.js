@@ -492,8 +492,20 @@ const DASHBOARD_HTML = `<!doctype html>
       </div>
 
       <h2>Midweek email</h2>
-      <p class="sub">Every Wednesday morning, your members get the key verse from Sunday, one question to think about, and a link to the sermon quiz. Each email has an unsubscribe link, and anyone who unsubscribes is never added back.</p>
+      <p class="sub">The key verse from Sunday, one question to think about, and a link to the sermon quiz. Pick whichever way suits your church — you can use more than one.</p>
       <div class="card">
+        <p style="margin:0 0 4px"><strong>1. Send it yourself</strong></p>
+        <p class="msg" style="margin:0 0 10px">Copy this week’s email into the email tool you already use (Planning Center, Mailchimp, Flocknote…). Nothing to share with us. It’s also in your Monday kit email.</p>
+        <div id="mwcopy"><p class="msg">It appears here after your first sermon is processed.</p></div>
+      </div>
+      <div class="card">
+        <p style="margin:0 0 4px"><strong>2. Let members sign themselves up</strong></p>
+        <p class="msg" style="margin:0 0 10px">Share this link or QR code in your bulletin, on screen, or on your website. We send the email every Wednesday at 7am.</p>
+        <div id="mwjoin"></div>
+      </div>
+      <div class="card">
+        <p style="margin:0 0 4px"><strong>3. Add your member list</strong></p>
+        <p class="msg" style="margin:0 0 10px">We send the email every Wednesday at 7am. Each email has an unsubscribe link, and anyone who unsubscribes is never added back. We never use the list for anything else.</p>
         <p style="margin:0 0 10px" id="mwtext"></p>
         <label>Paste your member email list, or upload a CSV export from your church software (Planning Center, Mailchimp, Breeze, etc.)</label>
         <textarea id="mbtext" rows="4" placeholder="jane@example.com&#10;bob@example.com"></textarea>
@@ -599,7 +611,15 @@ const DASHBOARD_HTML = `<!doctype html>
     $('ldt').innerHTML = L.length ? '<tr><th>Name</th><th>Email</th><th></th></tr>'+L.map(function(l){ return '<tr><td>'+esc(l.name||'')+'</td><td>'+esc(l.email)+(l.unsubscribed?' <span class="pill archived">unsubscribed</span>':'')+'</td><td><button class="ghost" data-ld="'+l.id+'">Remove</button></td></tr>'; }).join('')
       : '<tr><td class="msg">No leaders yet.</td></tr>';
     if (!$('wmsg').dataset.loaded) { $('wmsg').value = p.welcomeMessage||''; $('wmsg').dataset.loaded='1'; }
-    $('mwtext').innerHTML = '<strong>'+p.midweekSubscribers+'</strong> '+(p.midweekSubscribers===1?'person is':'people are')+' on your midweek email list.';
+    $('mwtext').innerHTML = '<strong>'+p.midweekSubscribers+'</strong> '+(p.midweekSubscribers===1?'person is':'people are')+' on your midweek email list (sign-ups and uploads together).';
+    var mc = k && k.midweekCopy;
+    $('mwcopy').innerHTML = !mc ? '<p class="msg">It appears here after your first sermon is processed.</p>' :
+      '<label>Subject</label><div class="row"><div><input id="mwsubj" readonly value="'+esc(mc.subject)+'"></div><div style="flex:0 0 auto"><button class="ghost" data-copy="mwsubj">Copy</button></div></div>'+
+      '<label style="margin-top:10px">Email</label><textarea id="mwbody" rows="8" readonly>'+esc(mc.text)+'</textarea>'+
+      '<div style="margin-top:8px"><button class="ghost" data-copy="mwbody">Copy email</button> <span class="msg" id="mwcopied"></span></div>';
+    $('mwjoin').innerHTML = p.joinUrl ? '<div class="row"><div><input id="mwlink" readonly value="'+esc(p.joinUrl)+'"></div><div style="flex:0 0 auto"><button class="ghost" data-copy="mwlink">Copy link</button></div></div>'+
+      '<div style="margin-top:12px;display:flex;gap:14px;align-items:center;flex-wrap:wrap"><img src="'+esc(p.joinQrUrl)+'" alt="QR code for the sign-up page" style="width:120px;height:120px;border-radius:8px;background:#fff">'+
+      '<div style="line-height:2"><a style="color:var(--gold);font-weight:700" href="'+esc(p.joinQrUrl)+'?download=1">Download QR code</a><br><a style="color:var(--gold);font-weight:700" href="'+esc(p.joinUrl)+'" target="_blank" rel="noopener">Preview the sign-up page</a></div></div>' : '';
   }); }
   $('kit').onclick = function(e){ if(e.target.id!=='kitre') return; $('kitmsg').textContent='Rebuilding… (about 30 seconds)';
     api('/church/me/kit/rebuild',{method:'POST'}).then(loadPro).catch(function(err){ $('kitmsg').textContent=err.message; }); };
@@ -614,6 +634,9 @@ const DASHBOARD_HTML = `<!doctype html>
       $('mbtext').value=''; $('mbmsg').textContent='Found '+j.found+' email'+(j.found===1?'':'s')+': added '+j.added+(j.alreadyOnList?', '+j.alreadyOnList+' already on the list':'')+(j.unsubscribed?', '+j.unsubscribed+' had unsubscribed and were not added back':'')+'.'; return loadPro(); })
       .catch(function(err){ $('mbmsg').className='msg err'; $('mbmsg').textContent=err.message; }); }
   $('mbadd').onclick = function(){ addMembers($('mbtext').value); };
+  document.addEventListener('click', function(e){ var b=e.target.closest && e.target.closest('button[data-copy]'); if(!b) return;
+    var el=$(b.getAttribute('data-copy')); el.select(); var done=function(){ var t=b.textContent; b.textContent='Copied'; setTimeout(function(){ b.textContent=t; },1500); };
+    if (navigator.clipboard) navigator.clipboard.writeText(el.value).then(done, function(){ document.execCommand('copy'); done(); }); else { document.execCommand('copy'); done(); } });
   $('mbfile').onchange = function(){ var f=this.files&&this.files[0]; if(!f) return; var r=new FileReader(); r.onload=function(){ addMembers(String(r.result||'')); }; r.readAsText(f); this.value=''; };
   $('mbrmb').onclick = function(){ api('/church/me/members/remove',{method:'POST',body:JSON.stringify({text:$('mbrm').value})}).then(function(j){ $('mbrm').value=''; $('mbmsg').className='msg'; $('mbmsg').textContent = j.removed ? 'Removed.' : 'That email wasn’t on the list.'; return loadPro(); }).catch(function(err){ $('mbmsg').className='msg err'; $('mbmsg').textContent=err.message; }); };
   function start(){ $('login').className='hide'; $('app').className='';

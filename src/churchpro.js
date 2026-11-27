@@ -16,9 +16,12 @@
  *     The app reports "featured_view"; the dashboard shows how many people nearby saw the church.
  *  5. Visitor follow-up. A welcome email goes to the visitor right away (church's own wording,
  *     replies go to the church). Staff get a reminder if a visitor is still "new" after 2 days.
- *  7. Midweek email. Members sign up on the church page; each Wednesday they get the key verse,
- *     one question, and a link to the sermon quiz.
- *       POST /church/:id/subscribe          the app's sign-up
+ *  7. Midweek email: the key verse, one question, and a link to the sermon quiz. Three ways, church's choice:
+ *     a) copy it into their own email tool (in the Monday staff kit and the dashboard; no list shared),
+ *     b) members sign up on the church's own page, shared as a link or QR code,
+ *     c) the church pastes/uploads its member list in the dashboard. (b) and (c) are sent by us each Wednesday.
+ *       GET  /church/:id/join               sign-up page;  GET /church/:id/join-qr.png  its QR code
+ *       POST /church/:id/subscribe          the sign-up
  *       GET  /u/:token                      one-click unsubscribe (leaders and members)
  *
  *  Dashboard API (church login): GET /church/me/pro, POST /church/me/leaders, DELETE /church/me/leaders/:lid,
@@ -29,6 +32,7 @@
 import OpenAI from "openai";
 import cron from "node-cron";
 import crypto from "crypto";
+import QRCode from "qrcode";
 import ZIPS from "us-zips";
 import { pool } from "./db.js";
 import { renderVerse, backgrounds } from "./verseimage.js";
@@ -213,6 +217,22 @@ async function latestSermonRow(churchId, { withinDays = null } = {}) {
 // Sermon ids change when a sermon is re-processed, so the mail log keys on church + date/title.
 const sermonKey = (s) => `${s.sermon_date || ""}|${String(s.title || "").slice(0, 80)}`;
 
+const joinUrl = (churchId) => `${API_BASE}/church/${churchId}/join`;
+const joinQrUrl = (churchId) => `${API_BASE}/church/${churchId}/join-qr.png`;
+
+/** The midweek email as a church can send it from its own email tool (no list shared with us). */
+function midweekCopy(church, s, kit) {
+  const appLink = shareLinkFor(church);
+  const hasQuiz = Array.isArray(s.quiz) && s.quiz.length >= 3;
+  const mw = (kit && kit.midweek) || {};
+  const subject = `Midweek: ${mw.keyVerse ? mw.keyVerse + " · " : ""}${s.title || "Sunday's sermon"}`.slice(0, 140);
+  const cta = hasQuiz ? "How much do you remember from Sunday? Take the 5-question sermon quiz and keep this week's study going in the Bible Study Genius app:" : "Keep this week's study going in the Bible Study Genius app:";
+  const text = [`Midweek with Sunday's sermon: ${s.title || "this week's sermon"}`, "",
+    mw.keyVerse ? `Key verse: ${mw.keyVerse}` : "", mw.question ? `Think about it: ${mw.question}` : "", "", cta, appLink]
+    .join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return { subject, text, appLink };
+}
+
 const guideUrl = (churchId, sermonId) => `${API_BASE}/church/${churchId}/sermon/${sermonId}/guide`;
 const quoteUrl = (churchId, sermonId, n) => `${API_BASE}/church/${churchId}/sermon/${sermonId}/quote/${n}.png`;
 
@@ -286,6 +306,10 @@ async function sendStaffKit(church, s) {
     <p style="margin:0 0 18px;color:#5b5878;font-size:14px">${(await pool.query(`SELECT COUNT(*)::int AS n FROM church_group_leaders WHERE church_id=$1 AND unsub_at IS NULL`, [church.id])).rows[0].n
       ? "It went to your small-group leaders this morning." : "Add your small-group leaders in the dashboard and they'll get it every Monday."}</p>
     ${cards ? `<p style="margin:0 0 10px"><b>Quote cards for social media</b> (tap one to download):</p>${cards}` : ""}
+    ${(() => { const mc = midweekCopy(church, s, kit); return `<p style="margin:22px 0 4px"><b>Midweek email, ready to send</b></p>
+    <p style="margin:0 0 8px;color:#5b5878;font-size:14px">Copy this into the email tool you already use (Planning Center, Mailchimp, Flocknote…) and send it Wednesday morning.</p>
+    <div style="border:1px solid #e7dfc8;border-radius:8px;padding:12px 14px;background:#fbf8ee;font-size:14px"><div style="color:#5b5878;font-size:12px;margin-bottom:6px">Subject: <b style="color:#1d1b38">${esc(mc.subject)}</b></div>${esc(mc.text).replace(/\n/g, "<br>")}</div>
+    <p style="margin:12px 0 0;color:#5b5878;font-size:14px">Or let members sign themselves up and we'll send it for you: share <a href="${esc(joinUrl(church.id))}" style="color:#9a7b1a">your sign-up link</a> or <a href="${esc(joinQrUrl(church.id))}" style="color:#9a7b1a">QR code</a>.</p>`; })()}
     <p style="margin:18px 0 0"><a href="${esc(dash)}" style="color:#9a7b1a;font-weight:700">Open your dashboard →</a></p>`;
   const ok = await sendEmail({ to, subject: `Your sermon kit: ${s.title || "this week"}`, html: emailShell(church, inner), text: `Your sermon kit is ready: ${dash}` });
   await pool.query(`UPDATE church_mail_log SET recipients = $1 WHERE id = $2`, [ok ? to.length : 0, logId]);
@@ -611,6 +635,45 @@ ${guideHtmlBody(c, s, kit)}<div class="p"><button onclick="window.print()">Print
     } catch (e) { err(res, e, "POST /church/:id/subscribe"); }
   });
 
+  // --- public: a church's own midweek email sign-up page (shared as a link or QR code; no list upload needed) ---
+  app.get("/church/:id/join", async (req, res) => {
+    const id = numId(req.params.id);
+    try {
+      const c = id && (await pool.query(`SELECT c.*, ${PRO_SQL} AS is_pro FROM churches c WHERE c.id = $1 AND c.active`, [id])).rows[0];
+      if (!c || !c.is_pro) return res.status(404).type("html").send("<!doctype html><p style='font-family:sans-serif;padding:40px'>This sign-up page isn't available.</p>");
+      const name = esc(nameOf(c));
+      res.set("Cache-Control", "public, max-age=300");
+      res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Midweek email · ${name}</title><meta name="robots" content="noindex">
+<style>body{margin:0;background:#0f1424;color:#f4eeda;font:17px/1.55 -apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box}
+.card{max-width:440px;width:100%;background:#1d1c3a;border:1px solid rgba(230,196,92,.25);border-radius:18px;padding:30px 26px}
+.k{color:#e6c45c;font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}h1{font-family:Georgia,serif;font-weight:600;font-size:28px;line-height:1.15;margin:6px 0 12px}
+ul{padding-left:20px;color:#c3cadb;margin:0 0 20px}input{width:100%;box-sizing:border-box;padding:13px 14px;border-radius:10px;border:1px solid rgba(230,196,92,.35);background:#0f1424;color:#f4eeda;font:inherit}
+button{width:100%;margin-top:10px;padding:13px;border:0;border-radius:10px;background:#e6c45c;color:#241b05;font:700 16px inherit;cursor:pointer}button:disabled{opacity:.6}
+.small{color:#9aa3b8;font-size:13px;margin-top:14px}.msg{margin-top:12px;font-weight:600}.hp{position:absolute;left:-9999px}a{color:#e6c45c}</style></head>
+<body><main class="card"><div class="k">${name}</div><h1>Get the midweek email</h1>
+<ul><li>The key verse from Sunday's sermon</li><li>One question to think about</li><li>A link to the sermon quiz</li></ul>
+<form id="f"><input id="e" type="email" required placeholder="Your email address" autocomplete="email" aria-label="Email address"><input class="hp" id="w" tabindex="-1" autocomplete="off" aria-hidden="true">
+<button id="b">Sign me up</button><div class="msg" id="m" role="status"></div></form>
+<p class="small">One email each Wednesday, sent for ${name} by Bible Study Genius. We use your address only for this email. Every email has a one-click unsubscribe. <a href="https://biblestudygenius.com/privacy">Privacy</a></p></main>
+<script>document.getElementById('f').onsubmit=function(ev){ev.preventDefault();var b=document.getElementById('b'),m=document.getElementById('m');b.disabled=true;m.textContent='';
+fetch(${JSON.stringify(`/church/${id}/subscribe`)},{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('e').value,website:document.getElementById('w').value})})
+.then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||'Something went wrong.');});})
+.then(function(){document.getElementById('f').innerHTML='<p class="msg">You\u2019re signed up! Look for it on Wednesday morning.</p>';})
+.catch(function(e){m.textContent=e.message;b.disabled=false;});};</script></body></html>`);
+    } catch (e) { console.error("GET /church/:id/join", e); res.status(500).send("error"); }
+  });
+  app.get("/church/:id/join-qr.png", async (req, res) => {
+    const id = numId(req.params.id);
+    if (!id) return res.status(404).send("not found");
+    try {
+      const buf = await QRCode.toBuffer(joinUrl(id), { type: "png", width: 600, margin: 2, color: { dark: "#1b2340", light: "#ffffff" } });
+      res.set("Cache-Control", "public, max-age=86400").type("png");
+      if (req.query.download) res.set("Content-Disposition", `attachment; filename="midweek-email-signup-qr.png"`);
+      res.send(buf);
+    } catch (e) { console.error("GET join-qr", e); res.status(500).send("error"); }
+  });
+
   // --- one-click unsubscribe (links in every email; POST is the mail apps' one-click) ---
   const unsubscribe = async (token) => {
     const t = String(token || "").slice(0, 64);
@@ -636,11 +699,11 @@ ${guideHtmlBody(c, s, kit)}<div class="p"><button onclick="window.print()">Print
       if (s && c.is_pro) {
         const k = await buildKit(s.id);
         kit = { sermonId: s.id, title: s.title, date: s.sermon_date, guideUrl: guideUrl(id, s.id), theme: k.guide.theme, questions: k.guide.questions.length,
-          quotes: (k.quotes || []).map((qt, i) => ({ ...qt, imageUrl: quoteUrl(id, s.id, i + 1) })), midweek: k.midweek, fallback: !!k.fallback };
+          quotes: (k.quotes || []).map((qt, i) => ({ ...qt, imageUrl: quoteUrl(id, s.id, i + 1) })), midweek: k.midweek, midweekCopy: midweekCopy(c, s, k), fallback: !!k.fallback };
       }
       const sent = (await pool.query(`SELECT kind, recipients, sent_at AS "sentAt" FROM church_mail_log WHERE church_id = $1 ORDER BY sent_at DESC LIMIT 12`, [id])).rows;
       res.set("Cache-Control", "no-store");
-      res.json({ pro: !!c.is_pro, leaders, kit, sent, welcomeMessage: c.welcome_message || DEFAULT_WELCOME, ...(await proStats(id)) });
+      res.json({ pro: !!c.is_pro, leaders, kit, sent, joinUrl: joinUrl(id), joinQrUrl: joinQrUrl(id), welcomeMessage: c.welcome_message || DEFAULT_WELCOME, ...(await proStats(id)) });
     } catch (e) { err(res, e, "GET /church/me/pro"); }
   });
   app.post("/church/me/leaders", churchAuth, async (req, res) => {
